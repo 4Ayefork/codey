@@ -5,6 +5,7 @@ Codey 是一个无界面的 Rust 桌面辅助进程，通过 CDP 连接官方 Co
 ## 当前能力
 
 - 打开 Codey 时自动启动 Codex，并通过 CDP 注入 Codey 设置按钮、Fast 模式展示修复、插件市场修复和消息选择工具；设置按钮在 Codex 客户端内部打开 Shadow DOM 隔离浮层，不跳转外部浏览器。
+- Windows 通过 EXE 或快捷方式启动时，Codey 会在 Codex 成功启动并完成注入后隐藏自己的专属命令行窗口，继续在后台维护连接；启动失败时保留窗口以显示错误，从已有 CMD / PowerShell 手动运行时也不会隐藏用户的终端。
 - 线路采用自动双模式：检测到 `~/.cc-switch/cc-switch.db` 时只读同步当前 Codex provider；没有 cc-switch 时读取本地 Codex 直登配置。线路变化需要重启由 Codey 启动的 Codex 后生效。
 - 官方线路沿用 ChatGPT 登录；第三方线路把 API 地址、原生 `wire_api` 协议和临时 bearer token 直接交给 Codex，不经过 Codey 转发或协议转换。
 - 配置页以官方账号可见模型为固定左列，第三方模型发现会直接请求当前 provider 的 `/v1/models` 或 `/models`，候选不会进入 Codex 官方模型菜单。
@@ -13,6 +14,7 @@ Codey 是一个无界面的 Rust 桌面辅助进程，通过 CDP 连接官方 Co
 - Codex Trace 写盘防护在 macOS / Windows 运行时自动启用，通过 SQLite `block_log_inserts` trigger 阻止 `logs_*.sqlite` 持续写入高频诊断日志；不设置开关，已有日志和会话数据不会被删除。
 - Windows 默认开启新版卡顿补丁：Codey 在 Codex 主进程执行前通过仅绑定 `127.0.0.1` 的临时 Inspector，把会反复触发原生 DLL 加载失败的 `@worklouder/device-kit-oai` 替换为无设备桩，并精确断路每 30 秒启动一次的 `child-process-snapshot-worker.js`。断路后直接返回合法空快照，不再启动 PowerShell，也不会执行 `Get-CimInstance Win32_Process` 和 `Win32_PerfFormattedData_PerfProc_Process` 两次 CIM/WMI 全量查询；普通 Worker 不受影响。Inspector 随后立即关闭，不修改 Microsoft Store 安装目录。
 - macOS / Windows 默认开启宠物硬阉割：Codey 先把 Codex 自带的 `electron-avatar-overlay-open` 启动状态设为关闭，再在主进程执行前安装仅存在于本次进程内的断路补丁。补丁在 V8 编译 Codex 主 bundle 前把宠物 manager 构造替换成无状态桩，并拒绝创建 356×320 宠物 BrowserWindow、`Pet Surface`、专用 preload 和 macOS 原生 `avatar-overlay.node`；因此不会注册宠物生命周期、计时器、原生合成或额外 Renderer。Codex 设置页、个人菜单和命令菜单中的唤醒宠物控件也会按稳定语义 ID 屏蔽。关闭开关后会在下一次由 Codey 启动 Codex 时撤掉断路补丁并恢复宠物及其控件，不改写 `app.asar`。
+- 可选的 FastCtx 上下文优化默认关闭。打开后，Codey 会在下次启动 Codex 时把内嵌的 FastCtx 作为本地 STDIO MCP 临时注册，提供带分页和输出预算的 `read`、`grep`、`glob` 与 `replace` 工具，减少文件读取、搜索和机械替换产生的命令拼装与冗余上下文；无需另外安装 FastCtx、npm 包或 Node.js。
 - Windows 原生 EXE 启动会移除继承到子进程的陈旧 `WSL_DISTRO_NAME`，避免新版客户端无意同步探测 `wsl.exe`；用户在 Codex 中明确启用的 WSL 模式不受影响。
 - 配置页提供“清理日志库”按钮：在线清空诊断日志、截断 WAL 并压缩数据库以回收磁盘空间，不直接删除运行中仍被 Codex 持有的文件，也不触碰会话、账号、配置或插件数据。
 - Trace 功能使用独立统计模块；仅在 Codey 完成 Codex 启动时读取一次日志库并把快照保存在内存中，展示日志条数、SQLite 实际占用、近 7 天内容写入估算、级别分布和高占用 target。配置页刷新和状态查询不会再次扫描日志库。
@@ -49,6 +51,7 @@ Codey 当前直接依赖同级目录的 `CodeyRuntime-main/crates/codey-runtime-
 - Trace 写盘防护不设开关：macOS / Windows 使用相同启动时机自动更新 Codex 根目录及旧版 `sqlite/` 目录中现有的 `logs_*.sqlite`，不会创建、清空或压缩日志库。
 - Windows 卡顿补丁不设开关：Codey 在运行时识别 Windows，并在每次启动 Codex 时自动隔离 Micro 设备模块和周期性 WMI 进程采样。首次应用或版本升级后应先从系统托盘完全退出已有 Codex，确保补丁能在新主进程执行前安装。macOS 不执行 Windows 专属分支。
 - 宠物硬阉割：`slimCodexPet` 默认为 `true`，macOS / Windows 都会在下次通过 Codey 启动 Codex 时生效。启用时若主 bundle 的语义锚点因官方升级而变化，补丁会失败关闭并停止 Codex，不会降级成仅隐藏 UI；关闭后下次启动会恢复完整宠物功能。
+- FastCtx 上下文工具：`fastContextTools` 默认为 `false`。打开后下次启动 Codex 生效；Codey 仅在本次运行的临时 `config.toml` 中注册独立的 `codey_fastctx` MCP、设置 8500 token 输出预算并追加工具使用指引，退出时随 provider 配置一起恢复原文件。用户已有的 `mcp_servers.fastctx` 不会被覆盖。
 - Codex App 路径：可在 Codey 配置界面填写；留空时使用 Codey 的平台发现逻辑。
 - CDP 默认端口：`9229`，如 Windows 端口被占用会按 core 的逻辑选择可用回环端口。
 
@@ -63,9 +66,12 @@ Codey 不改写 `auth.json`，因此 Codex 的账号栏仍会显示原来的官�
 ## 已知限制
 
 - 目标是 Codex Electron 桌面客户端，不覆盖 CLI。
-- Windows 新版卡顿补丁针对 Codex Micro / Work Louder 设备集成导致的原生模块异常，以及当前客户端的周期性 WMI 遥测采样；Windows 上会自动启用，不会连接 Codex Micro 硬件，也不会启动该遥测 Worker 或 PowerShell。插件 app-server 在清理旧进程时可能执行的一次性 WMI 查询仍保留，避免产生孤儿进程；它不是 30 秒反复调用的来源。只有宠物硬阉割保留用户开关。
+- Windows 新版卡顿补丁针对 Codex Micro / Work Louder 设备集成导致的原生模块异常，以及当前客户端的周期性 WMI 遥测采样；Windows 上会自动启用，不会连接 Codex Micro 硬件，也不会启动该遥测 Worker 或 PowerShell。插件 app-server 在清理旧进程时可能执行的一次性 WMI 查询仍保留，避免产生孤儿进程；它不是 30 秒反复调用的来源。宠物硬阉割与 FastCtx 上下文工具保留用户开关。
 - 当前 Codex 优先按 `threads.rollout_path` 定位 JSONL，并按 `task_started.turn_id` 删除整轮记录；旧版 `messages`、`thread_items`、`items` SQLite schema 作为兼容路径。
+- 内嵌 FastCtx 当前只发布文件读取、搜索、发现与批量替换工具，不发布其可选 Bash/后台任务组；PDF 引擎未编入 Codey，PDF 应继续使用 Codex 自带的 PDF 能力。
 - 第三方线路依赖 Codex 原生支持对应的 `wire_api`；Codey 不再提供 Responses/Chat Completions 协议转换。
 - 页面注入使用稳定的 `data-*`/`electronBridge.sendMessageFromView` 探测，Codex bundle 大幅改版时可能需要更新选择器适配层。
 - 飞书 `session.completed` 由真实 Codex turn 的完成状态触发，不再把单次模型 HTTP 响应误判为任务结束；失败通知与手动测试仍保留。机器人只配置 Webhook 地址，不保存或发送签名密钥；消息不包含 prompt、正文或 API Key，发送失败最多重试 3 次。
 - 首版明文 API Key 仅依赖文件权限保护，后续可把 `ConfigStore` 的 secret 存取替换为 macOS Keychain/Windows Credential Manager。
+
+FastCtx 集成基于 [yc-duan/fastctx](https://github.com/yc-duan/fastctx) `0.1.1` 的固定提交 `64a6a45`（MIT OR Apache-2.0）。
