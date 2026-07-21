@@ -15,8 +15,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-codey-runtime-core = { path = "../../CodeyRuntime-main/crates/codey-runtime-core" }
-codey-runtime-data = { path = "../../CodeyRuntime-main/crates/codey-runtime-data" }
+codey-runtime-core = { path = "../vendor/Codey/crates/codey-runtime-core" }
+codey-runtime-data = { path = "../vendor/Codey/crates/codey-runtime-data" }
 directories = "6"
 fastctx = { git = "https://github.com/yc-duan/fastctx", rev = "64a6a45f88e65a2c0305e36673fa5e3f99d95384", default-features = false }
 futures-util = "0.3"

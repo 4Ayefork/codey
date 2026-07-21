@@ -11,7 +11,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CODEY_RUNTIME_REF: v0.4.3
+  CARGO_BUILD_BUILD_DIR: target
 
 jobs:
   macos:
@@ -29,10 +29,6 @@ jobs:
     steps:
       - name: Checkout Codey
         uses: actions/checkout@v4
-
-      - name: Checkout Codey dependency
-        shell: bash
-        run: git clone --depth 1 --branch "$CODEY_RUNTIME_REF" https://example.invalid/private-runtime.git "$GITHUB_WORKSPACE/../CodeyRuntime-main"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -106,12 +102,6 @@ jobs:
     steps:
       - name: Checkout Codey
         uses: actions/checkout@v4
-
-      - name: Checkout Codey dependency
-        shell: pwsh
-        run: |
-          $dependency = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "..\CodeyRuntime-main"))
-          git clone --depth 1 --branch $env:CODEY_RUNTIME_REF https://example.invalid/private-runtime.git $dependency
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
