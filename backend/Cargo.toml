@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 codey-runtime-core = { path = "../vendor/Codey/crates/codey-runtime-core" }
 codey-runtime-data = { path = "../vendor/Codey/crates/codey-runtime-data" }
 directories = "6"
