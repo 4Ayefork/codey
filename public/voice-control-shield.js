@@ -5,10 +5,12 @@
   const voiceControlIds = new Set([
     "codex.command.composer.startDictation",
     "codex.command.composer.startVoiceMode",
+    "codex.command.realtimeVoice",
     "codex.commandDescription.composer.startDictation",
     "codex.commandDescription.composer.startVoiceMode",
     "codex.commandDescription.globalDictationHold",
     "codex.commandDescription.globalDictationToggle",
+    "codex.commandDescription.realtimeVoice",
     "codex.commandMenuTitle.composer.startDictation",
     "codex.command.globalDictationHold",
     "codex.command.globalDictationToggle",
@@ -23,20 +25,34 @@
     "settings.nav.voice",
     "settings.section.voice",
     "settings.general.voice",
+    "settings.general.realtimeVoice",
+    "settings.general.realtimeVoiceHotkey",
+    "settings.general.realtimeVoiceScreenContext",
+    "realtimeVoice",
   ]);
   const voiceControlIdPrefixes = [
+    "codex.command.realtimeVoice.",
+    "codex.commandDescription.realtimeVoice.",
+    "composer.realtime.",
+    "realtimeVoice.",
     "settings.general.globalDictationHotkey.",
     "settings.general.globalDictationToggleHotkey.",
     "settings.general.globalDictation.",
     "settings.general.globalDictationHistory.",
     "settings.general.dictationDictionary.",
+    "settings.general.realtimeVoice.",
+    "settings.general.realtimeVoiceHotkey.",
+    "settings.general.realtimeVoiceScreenContext.",
     "composer.dictation.",
     "settings.voice.",
   ];
-  const fallbackLabelPattern = /^(?:voice|voice mode|start voice mode|open the voice control window|start or stop voice mode|dictate|dictation|start dictation|click to dictate or hold|hold(?:-| )to(?:-| )dictate|toggle dictation|global dictation|语音|语音模式|开始语音模式|打开语音控制窗口|听写|开始听写|全局听写|按住听写|切换听写|語音|語音模式|開始語音模式|開啟語音控制視窗|聽寫|開始聽寫|全域聽寫)(?:\s*[(:（].*)?$/i;
+  const gptVoicePromotionIdPrefixes = ["realtimeVoice.homeAnnouncement."];
+  const fallbackLabelPattern = /^(?:try (?:chatgpt|codex) voice|voice|voice chat|voice chat hotkey|voice mode|start (?:new )?voice(?: chat| mode)?|stop voice chat|end voice chat|cancel voice chat|open the voice (?:chat )?control window|start or stop voice (?:chat|mode)|mute (?:your microphone|voice chat)|unmute (?:your microphone|voice chat)|dictate|dictation|start dictation|click to dictate or hold|hold(?:-| )to(?:-| )dictate|toggle dictation|global dictation|体验\s*(?:chatgpt|codex)?\s*语音|试试\s*(?:chatgpt|codex)?\s*语音|语音|语音聊天|开始语音(?:聊天|模式)?|停止语音聊天|结束语音聊天|打开语音控制窗口|听写|开始听写|全局听写|按住听写|切换听写|體驗\s*(?:chatgpt|codex)?\s*語音|試試\s*(?:chatgpt|codex)?\s*語音|語音|語音聊天|開始語音(?:聊天|模式)?|停止語音聊天|結束語音聊天|開啟語音控制視窗|聽寫|開始聽寫|全域聽寫)(?:\s*[(:（].*)?$/i;
   const reactInternalKeyPattern = /^__(?:reactProps|reactFiber|reactInternalInstance)\$.*/;
   const dictationRequestPattern = /(?:\/codex\/dictation-stream-connect-info|\/dictation\/stream)(?:[/?#]|$)/i;
+  const gptVoicePromotionAssetPattern = /(?:^|\/)[^/?#]*(?:bidi[^/?#]*banner|voice[^/?#]*banner)[^/?#]*\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)/i;
   const restoreResourceGuards = [];
+  const blockedElementStates = new Map();
 
   const disabledVoiceError = () => {
     const error = new Error("Codex voice is disabled by Codey");
@@ -57,6 +73,24 @@
         restoreResourceGuards.push(() => {
           if (mediaDevices.getUserMedia === guardedGetUserMedia) {
             mediaDevices.getUserMedia = nativeGetUserMedia;
+          }
+        });
+      } catch {}
+    }
+
+    const nativeEnumerateDevices = mediaDevices?.enumerateDevices;
+    if (typeof nativeEnumerateDevices === "function") {
+      const guardedEnumerateDevices = async function guardedEnumerateDevices() {
+        const devices = await Reflect.apply(nativeEnumerateDevices, mediaDevices, arguments);
+        return Array.from(devices ?? []).filter(
+          (device) => device?.kind !== "audioinput" && device?.kind !== "audiooutput",
+        );
+      };
+      try {
+        mediaDevices.enumerateDevices = guardedEnumerateDevices;
+        restoreResourceGuards.push(() => {
+          if (mediaDevices.enumerateDevices === guardedEnumerateDevices) {
+            mediaDevices.enumerateDevices = nativeEnumerateDevices;
           }
         });
       } catch {}
@@ -98,16 +132,28 @@
     voiceControlIds.has(value) ||
     voiceControlIdPrefixes.some((prefix) => value.startsWith(prefix));
 
-  const containsVoiceControlId = (value, depth = 0, seen = new WeakSet()) => {
-    if (typeof value === "string") return isVoiceControlId(value);
+  const containsMatchingValue = (value, predicate, depth = 0, seen = new WeakSet()) => {
+    if (typeof value === "string") return predicate(value);
     if (!value || typeof value !== "object" || depth > 7 || seen.has(value)) return false;
     seen.add(value);
     for (const [key, child] of Object.entries(value)) {
       if (["return", "child", "sibling", "stateNode", "_owner"].includes(key)) continue;
-      if (containsVoiceControlId(child, depth + 1, seen)) return true;
+      if (containsMatchingValue(child, predicate, depth + 1, seen)) return true;
     }
     return false;
   };
+
+  const hasMatchingReactValue = (control, predicate) =>
+    Object.keys(control)
+      .filter((key) => reactInternalKeyPattern.test(key))
+      .some((key) => {
+        try {
+          const internal = control[key];
+          return containsMatchingValue(internal?.memoizedProps ?? internal, predicate);
+        } catch {
+          return false;
+        }
+      });
 
   const isVoiceControl = (control) => {
     if (!(control instanceof HTMLElement)) return false;
@@ -118,17 +164,15 @@
     ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     if (fallbackLabelPattern.test(descriptor)) return true;
 
-    return Object.keys(control)
-      .filter((key) => reactInternalKeyPattern.test(key))
-      .some((key) => {
-        try {
-          const internal = control[key];
-          return containsVoiceControlId(internal?.memoizedProps ?? internal);
-        } catch {
-          return false;
-        }
-      });
+    return hasMatchingReactValue(control, isVoiceControlId);
   };
+
+  const isGptVoicePromotionControl = (control) =>
+    control instanceof HTMLElement
+      && hasMatchingReactValue(
+        control,
+        (value) => gptVoicePromotionIdPrefixes.some((prefix) => value.startsWith(prefix)),
+      );
 
   const controlsWithin = (root, selector) => {
     const controls = [];
@@ -139,31 +183,91 @@
     return controls;
   };
 
+  const findGptVoicePromotionRoot = (asset) => {
+    let promotion = asset;
+    let current = asset?.parentElement;
+    for (let depth = 0; current instanceof HTMLElement && depth < 8; depth += 1) {
+      if (current === document.body || current === document.documentElement) break;
+      const buttons = current.querySelectorAll?.("button, [role=button]") ?? [];
+      const editors = current.querySelectorAll?.(
+        "input, textarea, [contenteditable]:not([contenteditable=false])",
+      ) ?? [];
+      const textLength = current.textContent?.replace(/\s+/g, " ").trim().length ?? 0;
+      if (buttons.length > 0 && buttons.length <= 4 && editors.length === 0 && textLength <= 1_000) {
+        promotion = current;
+      } else if (promotion !== asset) {
+        break;
+      }
+      current = current.parentElement;
+    }
+    return promotion;
+  };
+
+  const fullyBlocked = (element) =>
+    element.getAttribute("data-codey-voice-control-blocked") === "true"
+      && element.getAttribute("aria-hidden") === "true"
+      && element.getAttribute("tabindex") === "-1"
+      && element.getAttribute("inert") !== null
+      && String(element.style.display || "").startsWith("none")
+      && (!("disabled" in element) || element.disabled);
+
+  const blockElement = (element) => {
+    if (fullyBlocked(element)) return;
+    if (!blockedElementStates.has(element)) {
+      blockedElementStates.set(element, {
+        attributes: new Map(
+          ["data-codey-voice-control-blocked", "aria-hidden", "tabindex", "inert"]
+            .map((name) => [name, element.getAttribute(name)]),
+        ),
+        disabled: "disabled" in element ? element.disabled : undefined,
+        display: element.style.getPropertyValue?.("display") ?? element.style.display ?? "",
+        displayPriority: element.style.getPropertyPriority?.("display") ?? "",
+      });
+    }
+    element.setAttribute("data-codey-voice-control-blocked", "true");
+    element.setAttribute("aria-hidden", "true");
+    element.setAttribute("tabindex", "-1");
+    element.setAttribute("inert", "");
+    element.style.setProperty("display", "none", "important");
+    if ("disabled" in element && !element.disabled) element.disabled = true;
+  };
+
   const block = (root = document) => {
     if (!enabled) return 0;
-    let blocked = 0;
+    const blockedElements = new Set();
     controlsWithin(
       root,
       "button, [role=button], [role=menuitem], [role=option], [role=switch], input, label",
     ).forEach((control) => {
       if (!isVoiceControl(control)) return;
-      const fullyBlocked = control.getAttribute("data-codey-voice-control-blocked") === "true"
-        && control.getAttribute("aria-hidden") === "true"
-        && control.getAttribute("tabindex") === "-1"
-        && control.getAttribute("inert") !== null
-        && String(control.style.display || "").startsWith("none")
-        && (!("disabled" in control) || control.disabled);
-      if (!fullyBlocked) {
-        control.setAttribute("data-codey-voice-control-blocked", "true");
-        control.setAttribute("aria-hidden", "true");
-        control.setAttribute("tabindex", "-1");
-        control.setAttribute("inert", "");
-        control.style.setProperty("display", "none", "important");
-        if ("disabled" in control && !control.disabled) control.disabled = true;
-      }
-      blocked += 1;
+      const target = isGptVoicePromotionControl(control)
+        ? findGptVoicePromotionRoot(control)
+        : control;
+      blockElement(target);
+      blockedElements.add(target);
     });
-    return blocked;
+    controlsWithin(root, "img").forEach((asset) => {
+      if (!gptVoicePromotionAssetPattern.test(String(asset.getAttribute("src") ?? ""))) return;
+      const promotion = findGptVoicePromotionRoot(asset);
+      blockElement(promotion);
+      blockedElements.add(promotion);
+    });
+    return blockedElements.size;
+  };
+
+  const restoreBlockedElements = () => {
+    blockedElementStates.forEach((state, element) => {
+      state.attributes.forEach((value, name) => {
+        if (value === null) element.removeAttribute(name);
+        else element.setAttribute(name, value);
+      });
+      element.style.removeProperty?.("display");
+      if (state.display) {
+        element.style.setProperty("display", state.display, state.displayPriority);
+      }
+      if (state.disabled !== undefined) element.disabled = state.disabled;
+    });
+    blockedElementStates.clear();
   };
 
   if (!enabled) {
@@ -175,6 +279,7 @@
       resourceGuardsInstalled: 0,
     });
     window.__codeyVoiceControlShieldCleanup = () => {
+      restoreBlockedElements();
       delete window.__codeyBlockNativeVoiceControls;
       delete window.__codeyVoiceControlShield;
       delete window.__codeyVoiceControlShieldCleanup;
@@ -210,6 +315,7 @@
       document.removeEventListener(eventName, stopVoiceControlEvent, true);
     });
     restoreResourceGuards.splice(0).reverse().forEach((restore) => restore());
+    restoreBlockedElements();
     delete window.__codeyBlockNativeVoiceControls;
     delete window.__codeyVoiceControlShield;
     delete window.__codeyVoiceControlShieldCleanup;

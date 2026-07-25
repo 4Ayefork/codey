@@ -13,9 +13,18 @@ class FakeElement {
     this.textContent = text;
     this.attributes = new Map();
     this.disabled = false;
+    this.parentElement = null;
     this.style = {
+      getPropertyPriority: (name) => {
+        const value = String(this.style[name] ?? "");
+        return value.endsWith(":important") ? "important" : "";
+      },
+      getPropertyValue: (name) => String(this.style[name] ?? "").replace(/:important$/, ""),
+      removeProperty: (name) => {
+        delete this.style[name];
+      },
       setProperty: (name, value, priority) => {
-        this.style[name] = `${value}:${priority}`;
+        this.style[name] = priority ? `${value}:${priority}` : value;
       },
     };
   }
@@ -28,8 +37,16 @@ class FakeElement {
     this.attributes.set(name, String(value));
   }
 
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+
   closest() {
     return this;
+  }
+
+  querySelectorAll() {
+    return [];
   }
 }
 
@@ -43,20 +60,68 @@ function loadShield(enabled) {
     memoizedProps: { id: "settings.general.globalDictationHotkey.label" },
   };
   const localized = new FakeElement("开始听写");
+  const gptVoiceComposer = new FakeElement();
+  gptVoiceComposer.__reactProps$test = {
+    children: { props: { id: "composer.realtime.start" } },
+  };
+  const gptVoiceSettings = new FakeElement();
+  gptVoiceSettings.__reactFiber$test = {
+    memoizedProps: { id: "settings.general.realtimeVoiceHotkey.label" },
+  };
+  const gptVoiceBannerAction = new FakeElement("Start Voice");
+  gptVoiceBannerAction.__reactProps$test = {
+    children: { props: { id: "realtimeVoice.homeAnnouncement.action" } },
+  };
+  const gptVoiceBannerDismiss = new FakeElement();
+  const gptVoicePromotion = new FakeElement(
+    "Try ChatGPT Voice Coordinate tasks, connect tools, and explore ideas Start Voice",
+  );
+  gptVoicePromotion.querySelectorAll = (selector) =>
+    selector.includes("button") ? [gptVoiceBannerAction, gptVoiceBannerDismiss] : [];
+  const gptVoicePromotionVisual = new FakeElement();
+  gptVoicePromotionVisual.parentElement = gptVoicePromotion;
+  gptVoiceBannerAction.parentElement = gptVoicePromotion;
+  gptVoiceBannerDismiss.parentElement = gptVoicePromotion;
+  const gptVoicePromotionAsset = new FakeElement();
+  gptVoicePromotionAsset.setAttribute(
+    "src",
+    "https://persistent.oaistatic.com/voice/bidi-homepage-banner-orb.21107572.webp",
+  );
+  gptVoicePromotionAsset.parentElement = gptVoicePromotionVisual;
   const unrelated = new FakeElement("打开设置");
-  const controls = [semantic, settings, localized, unrelated];
+  const controls = [
+    semantic,
+    settings,
+    localized,
+    gptVoiceComposer,
+    gptVoiceSettings,
+    gptVoiceBannerAction,
+    gptVoiceBannerDismiss,
+    unrelated,
+  ];
   const listeners = new Map();
   const document = {
-    querySelectorAll: () => controls,
+    body: null,
+    documentElement: null,
+    querySelectorAll: (selector) => selector === "img" ? [gptVoicePromotionAsset] : controls,
     addEventListener: (name, listener) => listeners.set(name, listener),
     removeEventListener: (name) => listeners.delete(name),
   };
   const mediaCalls = [];
+  const enumerateDeviceCalls = [];
   const fetchCalls = [];
   const webSocketCalls = [];
   const nativeGetUserMedia = (constraints) => {
     mediaCalls.push(constraints);
     return Promise.resolve("native-media");
+  };
+  const nativeEnumerateDevices = () => {
+    enumerateDeviceCalls.push(true);
+    return Promise.resolve([
+      { deviceId: "microphone", kind: "audioinput" },
+      { deviceId: "speakers", kind: "audiooutput" },
+      { deviceId: "camera", kind: "videoinput" },
+    ]);
   };
   const nativeFetch = (input) => {
     fetchCalls.push(input);
@@ -68,9 +133,21 @@ function loadShield(enabled) {
       webSocketCalls.push(url);
     }
   }
+  const rtcPeerConnectionCalls = [];
+  class NativeRTCPeerConnection {
+    constructor(configuration) {
+      rtcPeerConnectionCalls.push(configuration);
+    }
+  }
   const window = {
     fetch: nativeFetch,
-    navigator: { mediaDevices: { getUserMedia: nativeGetUserMedia } },
+    navigator: {
+      mediaDevices: {
+        enumerateDevices: nativeEnumerateDevices,
+        getUserMedia: nativeGetUserMedia,
+      },
+    },
+    RTCPeerConnection: NativeRTCPeerConnection,
     WebSocket: NativeWebSocket,
   };
   window.window = window;
@@ -79,13 +156,21 @@ function loadShield(enabled) {
     { document, Element: FakeElement, HTMLElement: FakeElement, URL, window },
   );
   return {
+    enumerateDeviceCalls,
     fetchCalls,
+    gptVoiceBannerAction,
+    gptVoiceComposer,
+    gptVoicePromotion,
+    gptVoiceSettings,
     listeners,
     localized,
     mediaCalls,
+    nativeEnumerateDevices,
     nativeFetch,
     nativeGetUserMedia,
+    NativeRTCPeerConnection,
     NativeWebSocket,
+    rtcPeerConnectionCalls,
     semantic,
     settings,
     unrelated,
@@ -97,11 +182,22 @@ function loadShield(enabled) {
 test("voice slim mode blocks composer, settings, and localized voice controls", () => {
   const runtime = loadShield(true);
 
-  for (const control of [runtime.semantic, runtime.settings, runtime.localized]) {
+  for (const control of [
+    runtime.semantic,
+    runtime.settings,
+    runtime.localized,
+    runtime.gptVoiceComposer,
+    runtime.gptVoiceSettings,
+    runtime.gptVoicePromotion,
+  ]) {
     assert.equal(control.getAttribute("data-codey-voice-control-blocked"), "true");
     assert.equal(control.disabled, true);
     assert.equal(control.style.display, "none:important");
   }
+  assert.equal(
+    runtime.gptVoiceBannerAction.getAttribute("data-codey-voice-control-blocked"),
+    null,
+  );
   assert.equal(runtime.unrelated.getAttribute("data-codey-voice-control-blocked"), null);
 
   let prevented = false;
@@ -125,11 +221,13 @@ test("disabling voice slim mode restores native voice controls", () => {
   assert.equal(runtime.localized.getAttribute("data-codey-voice-control-blocked"), null);
   assert.equal(runtime.window.__codeyBlockNativeVoiceControls(), 0);
   assert.equal(runtime.window.navigator.mediaDevices.getUserMedia, runtime.nativeGetUserMedia);
+  assert.equal(runtime.window.navigator.mediaDevices.enumerateDevices, runtime.nativeEnumerateDevices);
+  assert.equal(runtime.window.RTCPeerConnection, runtime.NativeRTCPeerConnection);
   assert.equal(runtime.window.fetch, runtime.nativeFetch);
   assert.equal(runtime.window.WebSocket, runtime.NativeWebSocket);
 });
 
-test("voice slim mode blocks audio capture and dictation network resources", async () => {
+test("voice slim mode prevents GPT Voice before WebRTC while preserving other peer connections", async () => {
   const runtime = loadShield(true);
 
   await assert.rejects(
@@ -143,6 +241,24 @@ test("voice slim mode blocks audio capture and dictation network resources", asy
     "native-media",
   );
   assert.deepEqual(runtime.mediaCalls, [{ video: true }]);
+
+  const devices = await runtime.window.navigator.mediaDevices.enumerateDevices();
+  assert.equal(devices.map((device) => device.kind).join(","), "videoinput");
+  assert.equal(runtime.enumerateDeviceCalls.length, 1);
+
+  await assert.rejects(
+    async () => {
+      await runtime.window.navigator.mediaDevices.getUserMedia({ audio: true });
+      return new runtime.window.RTCPeerConnection({ voice: true });
+    },
+    (error) => error?.name === "NotAllowedError",
+  );
+  assert.equal(runtime.rtcPeerConnectionCalls.length, 0);
+  assert.ok(
+    new runtime.window.RTCPeerConnection({ dataOnly: true })
+      instanceof runtime.NativeRTCPeerConnection,
+  );
+  assert.equal(runtime.rtcPeerConnectionCalls.length, 1);
 
   await assert.rejects(
     runtime.window.fetch("https://chatgpt.com/backend-api/codex/dictation-stream-connect-info"),
@@ -158,10 +274,17 @@ test("voice slim mode blocks audio capture and dictation network resources", asy
   const socket = new runtime.window.WebSocket("wss://chatgpt.com/other-stream");
   assert.equal(socket.url, "wss://chatgpt.com/other-stream");
   assert.deepEqual(runtime.webSocketCalls, ["wss://chatgpt.com/other-stream"]);
-  assert.equal(runtime.window.__codeyVoiceControlShield.resourceGuardsInstalled, 3);
+  assert.equal(runtime.window.__codeyVoiceControlShield.resourceGuardsInstalled, 4);
 
   runtime.window.__codeyVoiceControlShieldCleanup();
   assert.equal(runtime.window.navigator.mediaDevices.getUserMedia, runtime.nativeGetUserMedia);
+  assert.equal(runtime.window.navigator.mediaDevices.enumerateDevices, runtime.nativeEnumerateDevices);
+  assert.equal(runtime.window.RTCPeerConnection, runtime.NativeRTCPeerConnection);
   assert.equal(runtime.window.fetch, runtime.nativeFetch);
   assert.equal(runtime.window.WebSocket, runtime.NativeWebSocket);
+  assert.equal(runtime.semantic.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.semantic.disabled, false);
+  assert.equal(runtime.semantic.style.display, undefined);
+  assert.equal(runtime.gptVoicePromotion.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.gptVoicePromotion.style.display, undefined);
 });
