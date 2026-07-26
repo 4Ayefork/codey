@@ -46,7 +46,7 @@ if (import.meta.env.DEV) {
       defaultModelByProvider: {},
       disableTraceLogWrites: true,
       slimCodexPet: true,
-      slimCodexVoice: true,
+      slimCodexVoice: false,
       gpuLaunchMode: "off" as const,
       fastContextTools: false,
       subagentOptimization: false,
@@ -108,7 +108,15 @@ if (import.meta.env.DEV) {
             { id: "bridge-helpers", name: "桥接辅助", source: "builtin", status: "effective", detail: "桥接函数可调用" },
             { id: "model-whitelist", name: "模型白名单", source: "builtin", status: "effective", detail: "模型目录已加载（5 个模型）" },
             { id: "pet-control-shield", name: "宠物控制精简", source: "builtin", status: "effective", detail: "宠物控制精简已启用" },
-            { id: "voice-control-shield", name: "语音控制精简", source: "builtin", status: "effective", detail: "语音 UI 与资源拦截已启用" },
+            {
+              id: "voice-control-shield",
+              name: "语音控制精简",
+              source: "builtin",
+              status: "effective",
+              detail: previewConfig.slimCodexVoice
+                ? "语音 UI 与资源拦截已启用"
+                : "控制器已就绪，当前精简策略关闭",
+            },
             { id: "security-warning-shield", name: "安全提示控制", source: "builtin", status: "effective", detail: "控制器已就绪，当前屏蔽策略关闭" },
             { id: "settings-overlay-loader", name: "配置面板加载器", source: "builtin", status: "effective", detail: "配置面板按需加载器可用" },
             { id: "renderer-controls", name: "渲染器控制", source: "builtin", status: "effective", detail: "渲染器控制与按需加载 API 可用" },

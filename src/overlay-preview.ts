@@ -17,7 +17,7 @@ let previewConfig = {
   defaultModelByProvider: {},
   disableTraceLogWrites: true,
   slimCodexPet: true,
-  slimCodexVoice: true,
+  slimCodexVoice: false,
   gpuLaunchMode: "off" as const,
   fastContextTools: false,
   subagentOptimization: false,
