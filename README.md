@@ -110,4 +110,4 @@ Codey 不改写 `auth.json`，因此 Codex 的账号栏仍会显示原来的官�
 - 飞书 `session.completed` 由真实 Codex turn 的完成状态触发，不再把单次模型 HTTP 响应误判为任务结束；失败通知与手动测试仍保留。机器人只配置 Webhook 地址，不保存或发送签名密钥；消息不包含 prompt、正文或 API Key，发送失败最多重试 3 次。
 - 首版明文 API Key 仅依赖文件权限保护，后续可把 `ConfigStore` 的 secret 存取替换为 macOS Keychain/Windows Credential Manager。
 
-FastCtx 集成基于 [yc-duan/fastctx](https://github.com/yc-duan/fastctx) `0.2.1` 的固定提交 `9bbd954`（MIT OR Apache-2.0）。
+FastCtx 集成基于 [yc-duan/fastctx](https://github.com/yc-duan/fastctx) `0.2.3` 的固定提交 `8056641`（MIT OR Apache-2.0）。
