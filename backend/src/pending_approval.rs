@@ -886,8 +886,9 @@ mod tests {
     fn appended_rollout_lines_are_parsed_incrementally() {
         let temp = tempfile::tempdir().unwrap();
         let rollout_path = temp.path().join("rollout-thread-1.jsonl");
-        let mut contents =
-            String::from(r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#);
+        let mut contents = String::from(
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#,
+        );
         contents.push('\n');
         // Pad past the fingerprint window so the resume check is meaningful.
         for index in 0..40 {
@@ -967,7 +968,11 @@ mod tests {
             "an in-place rewrite must not be treated as an append"
         );
         assert_eq!(
-            updated.started_turns.iter().map(|turn| turn.turn_id.as_str()).collect::<Vec<_>>(),
+            updated
+                .started_turns
+                .iter()
+                .map(|turn| turn.turn_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["turn-9"]
         );
         assert_eq!(

@@ -206,7 +206,11 @@ fn rollout_headers_match(home: &Path, target_provider: &str) -> Result<bool> {
         }
     });
 
-    if let Some(error) = failure.lock().unwrap_or_else(|slot| slot.into_inner()).take() {
+    if let Some(error) = failure
+        .lock()
+        .unwrap_or_else(|slot| slot.into_inner())
+        .take()
+    {
         return Err(error);
     }
     Ok(!mismatch.load(Ordering::Relaxed))
