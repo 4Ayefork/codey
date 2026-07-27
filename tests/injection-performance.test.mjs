@@ -61,6 +61,23 @@ test("renderer core waits for sidebar interaction before loading session tools",
   assert.match(voiceShield, /if \(!enabled\) \{/);
 });
 
+test("renderer core defaults Codex locale to Chinese before remote config settles", async () => {
+  const inject = await readFile(new URL("public/renderer-inject.js", root), "utf8");
+
+  assert.match(inject, /const defaultChineseLocale = "zh-CN"/);
+  assert.match(inject, /const statsigI18nDynamicConfigId = "72216192"/);
+  assert.match(inject, /defineNavigatorGetter\(target, "language", defaultChineseLocale\)/);
+  assert.match(inject, /defineNavigatorGetter\(target, "languages", defaultChineseLanguages\)/);
+  assert.match(inject, /key: "localeOverride"/);
+  assert.match(inject, /value: defaultChineseLocale/);
+  assert.match(inject, /enable_i18n: true/);
+  assert.match(inject, /locale_source: "SYSTEM"/);
+  assert.match(inject, /name === statsigI18nDynamicConfigId/);
+  assert.match(inject, /Object\.defineProperty\(window, "__STATSIG__"/);
+  assert.match(inject, /patchStatsigClients\(\)/);
+  assert.match(inject, /scanStatsigUntilReady/);
+});
+
 test("plugin bridge fast-paths unrelated IPC payloads without a DOM observer", async () => {
   const source = await readFile(new URL("public/plugin-marketplace-fix.js", root), "utf8");
   const nativeCalls = [];

@@ -192,10 +192,15 @@ pub fn prepare_injection_scripts(
             "renderer-controls",
             "渲染器控制",
             RENDERER_INJECT_SCRIPT,
-            r#"window.__codeyRendererCoreLoaded === true
-              && typeof window.__codeyRendererScan === "function"
-              && typeof window.__codeyLoadSessionTools === "function"
-              ? "渲染器控制与按需加载 API 可用" : """#
+            r#"(() => {
+              if (window.__codeyRendererCoreLoaded !== true
+                || typeof window.__codeyRendererScan !== "function"
+                || typeof window.__codeyLoadSessionTools !== "function") return "";
+              const locale = window.__codeyDefaultChineseLocale?.snapshot?.();
+              return locale?.locale === "zh-CN"
+                ? `渲染器控制、默认中文与按需加载 API 可用（Statsig client ${locale.statsigClientsPatched} 个）`
+                : "渲染器控制与按需加载 API 可用";
+            })()"#
                 .to_string(),
         ),
         (
