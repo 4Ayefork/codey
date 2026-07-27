@@ -4,7 +4,7 @@ import test from "node:test";
 
 const normalizeLineEndings = (source) => source.replace(/\r\n/g, "\n");
 
-async function loadStartupPatchExpression() {
+async function loadStartupPatchExpression(experimentalFeatureOverrides = {}) {
   const source = normalizeLineEndings(await readFile(
     new URL("../backend/src/codex_startup_patch.rs", import.meta.url),
     "utf8",
@@ -16,7 +16,11 @@ async function loadStartupPatchExpression() {
   return template
     .replaceAll("__DISABLE_PET__", "false")
     .replaceAll("__DISABLE_VOICE__", "false")
-    .replaceAll("__FAST_CODEX_STARTUP__", "true");
+    .replaceAll("__FAST_CODEX_STARTUP__", "true")
+    .replaceAll(
+      "__EXPERIMENTAL_FEATURE_OVERRIDES__",
+      JSON.stringify(experimentalFeatureOverrides),
+    );
 }
 
 test("an incompatible optional renderer patch never blocks the Codex module response", async () => {
@@ -45,8 +49,11 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
 
   try {
     assert.equal(
-      (0, eval)(await loadStartupPatchExpression()),
-      "codey-startup-patch-installed-v14",
+      (0, eval)(await loadStartupPatchExpression({
+        unified_exec: true,
+        remote_compaction_v2: false,
+      })),
+      "codey-startup-patch-installed-v15",
     );
     const electron = Module._load("electron", undefined, false);
     const upstreamHandler = async () => new Response([
@@ -108,6 +115,38 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       patchedStatsigSource,
       /i\.initializeAsync\(\)\.catch/,
     );
+
+    const featureSource = [
+      "function Lln(e){",
+      "let t=zln(e),n=Bln(e),r={...t,...n,[Fnn]:mnt(e,`2380644311`)};",
+      "return Hf.info(`Concurrent reasoning summaries feature override resolved`,{}),r}",
+      "const feature_overrides=`feature_overrides`,gate=`2508143457`;",
+    ].join("");
+    electron.protocol.handle("app", async () => new Response(featureSource));
+    const featureResponse = await installedHandler({
+      url: "app://-/assets/app-initial-BHB6SClA.js",
+    });
+    const patchedFeatureSource = await featureResponse.text();
+    const resolveFeatures = Function(
+      "zln",
+      "Bln",
+      "Fnn",
+      "mnt",
+      "Hf",
+      `${patchedFeatureSource};return Lln`,
+    )(
+      () => ({ unified_exec: false, remote_compaction_v2: true }),
+      () => ({ shell_snapshot: true }),
+      "concurrent_reasoning_summaries",
+      () => true,
+      { info() {} },
+    );
+    assert.deepEqual(resolveFeatures({}), {
+      unified_exec: true,
+      remote_compaction_v2: false,
+      shell_snapshot: true,
+      concurrent_reasoning_summaries: true,
+    });
 
     let rejectBootstrap;
     const neverCompletesBootstrap = new Promise((_, reject) => {

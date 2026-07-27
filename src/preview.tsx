@@ -26,6 +26,17 @@ let previewConfig = {
   fastCodexStartup: true,
   subagentOptimization: false,
   hideFullAccessWarning: false,
+  experimentalFeatures: {
+    unifiedExec: false,
+    shellSnapshot: false,
+    responsesWebsocketsV2: false,
+    toolSearchAlwaysDeferMcpTools: false,
+    standaloneWebSearch: false,
+    enableRequestCompression: true,
+    remoteCompactionV2: true,
+    applyPatchStreamingEvents: true,
+    concurrentReasoningSummaries: true,
+  },
 };
 
 const previewCcSwitch = {
@@ -70,6 +81,9 @@ window.__codeyInvokeApi = async (command, args) => {
     };
   }
   if (command === "sync_current_provider") return { status: "ok", config: previewConfig, modelState: previewModelState, ccSwitch: previewCcSwitch };
+  if (command === "sync_official_experimental_features") {
+    return { status: "ok", experimentalFeatures: previewConfig.experimentalFeatures };
+  }
   if (command === "fetch_current_provider_models") {
     return {
       status: "ok",

@@ -10,6 +10,8 @@ use codey_runtime_core::bridge::{
 use codey_runtime_core::cdp::{list_targets, pick_injectable_codex_page_target};
 use serde::{Deserialize, Serialize};
 
+use crate::config::ExperimentalFeaturesConfig;
+
 const SETTINGS_OVERLAY_LOAD_PATH: &str = "/internal/codey/settings-overlay/load";
 const SESSION_TOOLS_LOAD_PATH: &str = "/internal/codey/session-tools/load";
 const FAST_STARTUP_STATSIG_TIMEOUT_MS: u64 = 1500;
@@ -434,6 +436,82 @@ pub async fn read_injection_statuses(
     Ok(reconcile_injection_statuses(&scripts.descriptors, reported))
 }
 
+pub async fn read_official_experimental_features(
+    websocket_url: &str,
+) -> Result<ExperimentalFeaturesConfig> {
+    let response = codey_runtime_core::bridge::evaluate_script(
+        websocket_url,
+        official_experimental_features_script(),
+    )
+    .await
+    .context("读取 Codex 官方试验性功能配置失败")?;
+    let payload = runtime_value(&response)
+        .and_then(serde_json::Value::as_str)
+        .context("Codex Statsig 尚未返回可解析的官方配置")?;
+    serde_json::from_str(payload).context("解析 Codex 官方试验性功能配置失败")
+}
+
+fn official_experimental_features_script() -> &'static str {
+    r#"(() => {
+  const client = globalThis.__STATSIG__?.firstInstance;
+  const values = client?._store?._valuesForExternalUse;
+  if (!values || typeof values !== "object") {
+    throw new Error("Codex Statsig 尚未初始化完成");
+  }
+  const gates = values.feature_gates ?? values.featureGates;
+  if (!gates || typeof gates !== "object") {
+    throw new Error("Codex Statsig 官方功能门数据不可用");
+  }
+  const readGate = (id, key) => {
+    const value = gates[id]?.value;
+    if (typeof value !== "boolean") {
+      throw new Error(`Codex Statsig 缺少 ${key}（${id}）`);
+    }
+    return value;
+  };
+  const result = {
+    unifiedExec: readGate("1786883712", "unified_exec"),
+    shellSnapshot: readGate("1615536597", "shell_snapshot"),
+    responsesWebsocketsV2: readGate("2734851136", "responses_websockets_v2"),
+    toolSearchAlwaysDeferMcpTools: readGate(
+      "2701734443",
+      "tool_search_always_defer_mcp_tools",
+    ),
+    standaloneWebSearch: readGate("3701003275", "standalone_web_search"),
+    enableRequestCompression: readGate(
+      "30039772",
+      "enable_request_compression",
+    ),
+    remoteCompactionV2: readGate("321109023", "remote_compaction_v2"),
+    applyPatchStreamingEvents: readGate(
+      "358284800",
+      "apply_patch_streaming_events",
+    ),
+    concurrentReasoningSummaries: readGate(
+      "2508143457",
+      "concurrent_reasoning_summaries",
+    ),
+  };
+  const configs = values.dynamic_configs ?? values.dynamicConfigs ?? {};
+  const layers = values.layer_configs ?? values.layerConfigs ?? {};
+  const layer = configs["3902942138"] ?? layers["3902942138"];
+  const layerOverrides = layer?.value?.feature_overrides;
+  const layerKeyMap = {
+    unified_exec: "unifiedExec",
+    shell_snapshot: "shellSnapshot",
+    responses_websockets_v2: "responsesWebsocketsV2",
+    tool_search_always_defer_mcp_tools: "toolSearchAlwaysDeferMcpTools",
+  };
+  if (layerOverrides && typeof layerOverrides === "object") {
+    for (const [rawKey, value] of Object.entries(layerOverrides)) {
+      const configKey = layerKeyMap[String(rawKey).replaceAll("-", "_")];
+      if (configKey && typeof value === "boolean") result[configKey] = value;
+    }
+  }
+  return JSON.stringify(result);
+})()"#
+}
+
 fn injection_status_snapshot_script(descriptors: &[InjectionScriptDescriptor]) -> String {
     let mut probes = String::from("{\n");
     for descriptor in descriptors {
@@ -806,6 +884,17 @@ mod tests {
             "result": { "result": { "type": "boolean", "value": true } }
         });
         assert_eq!(runtime_value(&response), Some(&serde_json::json!(true)));
+    }
+
+    #[test]
+    fn official_feature_sync_reads_gates_then_applies_the_feature_override_layer() {
+        let script = official_experimental_features_script();
+
+        assert!(script.contains(r#"readGate("1786883712", "unified_exec")"#));
+        assert!(script.contains(r#""30039772""#));
+        assert!(script.contains(r#"configs["3902942138"] ?? layers["3902942138"]"#));
+        assert!(script.contains("feature_overrides"));
+        assert!(script.contains("result[configKey] = value"));
     }
 
     #[test]

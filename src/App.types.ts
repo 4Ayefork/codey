@@ -10,6 +10,18 @@ export type Profile = {
   ccSwitchReadOnly: boolean;
 };
 
+export type ExperimentalFeaturesConfig = {
+  unifiedExec: boolean;
+  shellSnapshot: boolean;
+  responsesWebsocketsV2: boolean;
+  toolSearchAlwaysDeferMcpTools: boolean;
+  standaloneWebSearch: boolean;
+  enableRequestCompression: boolean;
+  remoteCompactionV2: boolean;
+  applyPatchStreamingEvents: boolean;
+  concurrentReasoningSummaries: boolean;
+};
+
 export type Config = {
   activeProfileId: string;
   profiles: Profile[];
@@ -27,6 +39,7 @@ export type Config = {
   fastCodexStartup: boolean;
   subagentOptimization: boolean;
   hideFullAccessWarning: boolean;
+  experimentalFeatures: ExperimentalFeaturesConfig;
 };
 
 export type OfficialModelState = {

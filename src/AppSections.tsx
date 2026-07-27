@@ -55,6 +55,68 @@ const GPU_LAUNCH_MODES = [
   label: string;
 }>;
 
+const EXPERIMENTAL_FEATURES = [
+  {
+    configKey: "unifiedExec",
+    flag: "unified_exec",
+    label: "统一命令执行",
+    description: "统一命令执行、后台进程管理与流式输出。",
+  },
+  {
+    configKey: "shellSnapshot",
+    flag: "shell_snapshot",
+    label: "Shell 环境快照",
+    description: "复用 Shell 环境快照，减少重复初始化开销。",
+  },
+  {
+    configKey: "responsesWebsocketsV2",
+    flag: "responses_websockets_v2",
+    label: "Responses WebSocket v2",
+    description: "使用 WebSocket v2，降低连接与流式输出延迟。",
+  },
+  {
+    configKey: "toolSearchAlwaysDeferMcpTools",
+    flag: "tool_search_always_defer_mcp_tools",
+    label: "MCP 工具按需加载",
+    description: "减少初始工具上下文；首次调用相关工具可能稍慢。",
+  },
+  {
+    configKey: "standaloneWebSearch",
+    flag: "standalone_web_search",
+    label: "独立网页搜索",
+    description: "使用独立网页搜索链路，仅影响网页搜索任务。",
+  },
+  {
+    configKey: "enableRequestCompression",
+    flag: "enable_request_compression",
+    label: "请求压缩",
+    description: "压缩发送给服务端的请求，减少网络传输量。",
+  },
+  {
+    configKey: "remoteCompactionV2",
+    flag: "remote_compaction_v2",
+    label: "远程上下文压缩 v2",
+    description: "在长会话中远程压缩上下文，降低上下文开销。",
+  },
+  {
+    configKey: "applyPatchStreamingEvents",
+    flag: "apply_patch_streaming_events",
+    label: "补丁流式事件",
+    description: "流式展示补丁应用进度和结果。",
+  },
+  {
+    configKey: "concurrentReasoningSummaries",
+    flag: "concurrent_reasoning_summaries",
+    label: "并发推理摘要",
+    description: "并发生成推理摘要，减少结果等待时间。",
+  },
+] as const satisfies ReadonlyArray<{
+  configKey: keyof Config["experimentalFeatures"];
+  flag: string;
+  label: string;
+  description: string;
+}>;
+
 type OperationsPanelProps = {
   config: Config;
   status: RuntimeStatus;
@@ -871,6 +933,80 @@ export function ModelSection({
           </span>
           <Badge variant="secondary">只读</Badge>
         </div>
+      </Card>
+    </section>
+  );
+}
+
+type ExperimentalFeaturesCardProps = {
+  config: Config;
+  busy: string | null;
+  isBusy: boolean;
+  onConfigChange: (config: Config) => void;
+  onSyncOfficial: () => void;
+};
+
+export function ExperimentalFeaturesCard({
+  config,
+  busy,
+  isBusy,
+  onConfigChange,
+  onSyncOfficial,
+}: ExperimentalFeaturesCardProps) {
+  return (
+    <section className="secondary-section" aria-labelledby="experimental-features-title">
+      <div className="section-title compact">
+        <div>
+          <h2 id="experimental-features-title">试验性功能</h2>
+          <p>由用户配置固定控制；保存并重启 Codex 后生效。</p>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={isBusy}
+          aria-busy={busy === "sync-experimental-features"}
+          onClick={onSyncOfficial}
+        >
+          {busy === "sync-experimental-features"
+            ? <LoaderCircle className="spinner" aria-hidden="true" />
+            : <RefreshCw aria-hidden="true" />}
+          {busy === "sync-experimental-features" ? "同步中" : "同步官方配置"}
+        </Button>
+      </div>
+      <Card className="secondary-card experimental-features-card">
+        <div className="feature-grid">
+          {EXPERIMENTAL_FEATURES.map((feature) => {
+            const enabled = config.experimentalFeatures[feature.configKey];
+            return (
+              <div className={`feature-card ${enabled ? "active" : ""}`} key={feature.flag}>
+                <div className="feature-card-header">
+                  <div className="experimental-feature-heading">
+                    <strong>{feature.label}</strong>
+                    <code>{feature.flag}</code>
+                  </div>
+                  <Switch
+                    checked={enabled}
+                    disabled={isBusy}
+                    onCheckedChange={(checked) => onConfigChange({
+                      ...config,
+                      experimentalFeatures: {
+                        ...config.experimentalFeatures,
+                        [feature.configKey]: checked,
+                      },
+                    })}
+                    aria-label={`${enabled ? "关闭" : "开启"}${feature.label}`}
+                  />
+                </div>
+                <div className="feature-card-body">
+                  <small>{feature.description}</small>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="experimental-features-note">
+          “同步官方配置”只更新当前草稿；不点击同步时会一直使用已保存的用户配置。
+        </p>
       </Card>
     </section>
   );

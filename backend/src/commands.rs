@@ -800,6 +800,7 @@ pub async fn invoke_api(state: &Arc<AppState>, command: &str, args: Value) -> Va
             Err(error) => Err(error),
         },
         "sync_current_provider" => sync_current_provider_command(state).await,
+        "sync_official_experimental_features" => sync_official_experimental_features(state).await,
         "fetch_current_provider_models" => fetch_current_provider_models(state).await,
         "save_selected_models" => match argument::<Vec<String>>(&args, "models") {
             Ok(models) => save_selected_models(state, models).await,
@@ -967,6 +968,7 @@ pub async fn save_codey_config(
     config.fast_codex_startup = config_input.fast_codex_startup;
     config.subagent_optimization = config_input.subagent_optimization;
     config.hide_full_access_warning = config_input.hide_full_access_warning;
+    config.experimental_features = config_input.experimental_features;
     let config = config.normalize();
     let restart_required = runtime_config_requires_restart(state, &config).await;
     if config.disable_trace_log_writes != previous.disable_trace_log_writes {
@@ -1052,6 +1054,21 @@ pub async fn sync_current_provider_command(state: &Arc<AppState>) -> Result<Valu
         "ccSwitch":cc_switch,
         "modelState":model_state,
         "restartRequired":restart_required,
+    }))
+}
+
+pub async fn sync_official_experimental_features(state: &Arc<AppState>) -> Result<Value, String> {
+    let runtime = state.runtime.lock().await.clone();
+    let Some(runtime) = runtime else {
+        return Err("Codex 当前未运行，无法同步官方试验性功能配置".to_string());
+    };
+    let websocket_url = runtime.renderer_websocket_url().await;
+    let experimental_features = cdp::read_official_experimental_features(&websocket_url)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(json!({
+        "status": "ok",
+        "experimentalFeatures": experimental_features,
     }))
 }
 
@@ -1389,6 +1406,7 @@ fn config_requires_restart(applied: &CodeyConfig, current: &CodeyConfig) -> bool
         || applied.fast_context_tools != current.fast_context_tools
         || applied.fast_codex_startup != current.fast_codex_startup
         || applied.subagent_optimization != current.subagent_optimization
+        || applied.experimental_features != current.experimental_features
         || applied.selected_models() != current.selected_models()
         || applied.upstream_models() != current.upstream_models()
         || applied.default_model() != current.default_model()
@@ -1650,6 +1668,17 @@ mod restart_tests {
         let mut fast_startup_change = applied.clone();
         fast_startup_change.fast_codex_startup = !fast_startup_change.fast_codex_startup;
         assert!(config_requires_restart(&applied, &fast_startup_change));
+
+        let mut experimental_feature_change = applied.clone();
+        experimental_feature_change
+            .experimental_features
+            .unified_exec = !experimental_feature_change
+            .experimental_features
+            .unified_exec;
+        assert!(config_requires_restart(
+            &applied,
+            &experimental_feature_change
+        ));
     }
 
     #[test]

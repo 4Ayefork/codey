@@ -28,7 +28,8 @@ async function loadVoicePatchExpression() {
   return template
     .replaceAll("__DISABLE_PET__", "false")
     .replaceAll("__DISABLE_VOICE__", "true")
-    .replaceAll("__FAST_CODEX_STARTUP__", "true");
+    .replaceAll("__FAST_CODEX_STARTUP__", "true")
+    .replaceAll("__EXPERIMENTAL_FEATURE_OVERRIDES__", "{}");
 }
 
 test("voice startup patch blocks native listeners and Dictation windows", async () => {
@@ -58,7 +59,7 @@ test("voice startup patch blocks native listeners and Dictation windows", async 
   };
 
   try {
-    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v14");
+    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v15");
 
     const childProcess = Module._load("node:child_process", undefined, false);
     const bareMonitor = childProcess.spawn(

@@ -52,6 +52,17 @@ if (import.meta.env.DEV) {
       fastCodexStartup: true,
       subagentOptimization: false,
       hideFullAccessWarning: false,
+      experimentalFeatures: {
+        unifiedExec: false,
+        shellSnapshot: false,
+        responsesWebsocketsV2: false,
+        toolSearchAlwaysDeferMcpTools: false,
+        standaloneWebSearch: false,
+        enableRequestCompression: true,
+        remoteCompactionV2: true,
+        applyPatchStreamingEvents: true,
+        concurrentReasoningSummaries: true,
+      },
     };
     const previewCcSwitch = {
       available: true,
@@ -150,6 +161,9 @@ if (import.meta.env.DEV) {
       }
       if (command === "sync_current_provider") {
         return { config: previewConfig, modelState: previewModelState, ccSwitch: previewCcSwitch, restartRequired: false };
+      }
+      if (command === "sync_official_experimental_features") {
+        return { status: "ok", experimentalFeatures: previewConfig.experimentalFeatures };
       }
       if (command === "clear_codex_trace_logs") {
         return {

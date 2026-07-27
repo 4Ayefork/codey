@@ -2,13 +2,16 @@
 
 use anyhow::Result;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v14";
+use crate::config::ExperimentalFeaturesConfig;
+
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v15";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
     pub disable_pet: bool,
     pub disable_voice: bool,
     pub fast_codex_startup: bool,
+    pub experimental_features: ExperimentalFeaturesConfig,
 }
 
 pub fn inspector_argument(port: u16) -> String {
@@ -20,6 +23,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const disablePet = __DISABLE_PET__;
   const disableVoice = __DISABLE_VOICE__;
   const fastCodexStartup = __FAST_CODEX_STARTUP__;
+  const experimentalFeatureOverrides = __EXPERIMENTAL_FEATURE_OVERRIDES__;
   const statsigBootstrapTimeoutMs = 1500;
   const statsigStartupRemainingMs =
     `Math.max(0,(globalThis.__CODEY_STATSIG_STARTUP_DEADLINE_MS__??=Date.now()+${statsigBootstrapTimeoutMs})-Date.now())`;
@@ -186,6 +190,19 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         (_match, clientName) =>
           `${clientName}.loadingStatus!==\`Ready\`&&Promise.race([${clientName}.initializeAsync(),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig async initialization timeout")),${statsigStartupRemainingMs}))]).catch(`,
         "Statsig async client initialization timeout",
+      );
+    }
+    if (
+      source.includes("Concurrent reasoning summaries feature override resolved") &&
+      source.includes("feature_overrides") &&
+      source.includes("2508143457")
+    ) {
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(\b([$A-Z_a-z][$\w]*)\s*=\s*\{\.\.\.[$A-Z_a-z][$\w]*,\.\.\.[$A-Z_a-z][$\w]*,\[[$A-Z_a-z][$\w]*\]:[$A-Z_a-z][$\w]*\([$A-Z_a-z][$\w]*,`2380644311`\)\}\s*;\s*)return/g,
+        (_match, assignment, resultName) =>
+          `${assignment}${resultName}={...${resultName},...${JSON.stringify(experimentalFeatureOverrides)}};return`,
+        "experimental feature overrides",
       );
     }
     return patched;
@@ -1303,11 +1320,14 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v14";
+  return "codey-startup-patch-installed-v15";
 })()
 "#;
 
 fn patch_expression(options: PatchOptions) -> String {
+    let experimental_feature_overrides =
+        serde_json::to_string(&options.experimental_features.codex_feature_overrides())
+            .expect("experimental feature overrides should serialize");
     STARTUP_PATCH_TEMPLATE
         .replace(
             "__DISABLE_PET__",
@@ -1328,6 +1348,10 @@ fn patch_expression(options: PatchOptions) -> String {
             } else {
                 "false"
             },
+        )
+        .replace(
+            "__EXPERIMENTAL_FEATURE_OVERRIDES__",
+            &experimental_feature_overrides,
         )
 }
 
@@ -1526,7 +1550,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v14");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v15");
     }
 
     #[test]
@@ -1535,6 +1559,7 @@ mod tests {
             disable_pet: true,
             disable_voice: false,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
 
         assert!(expression.contains("const disablePet = true"));
@@ -1569,6 +1594,7 @@ mod tests {
             disable_pet: false,
             disable_voice: false,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
 
         assert!(expression.contains("process.platform === \"win32\""));
@@ -1584,6 +1610,7 @@ mod tests {
             disable_pet: false,
             disable_voice: false,
             fast_codex_startup: false,
+            experimental_features: Default::default(),
         });
 
         assert!(expression.contains("const fastCodexStartup = false"));
@@ -1596,6 +1623,7 @@ mod tests {
             disable_pet: false,
             disable_voice: true,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
 
         assert!(expression.contains("const disableVoice = true"));
@@ -1612,6 +1640,7 @@ mod tests {
             disable_pet: false,
             disable_voice: false,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
 
         assert!(expression.contains("__CODEY_TEMP_WEBVIEW_LIFECYCLE__.close"));
@@ -1735,6 +1764,7 @@ mod tests {
             disable_pet: true,
             disable_voice: false,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
         install_over_websocket(&format!("ws://{address}"), &expression)
             .await
@@ -1796,6 +1826,7 @@ mod tests {
             disable_pet: true,
             disable_voice: false,
             fast_codex_startup: true,
+            experimental_features: Default::default(),
         });
         let error = tokio::time::timeout(
             std::time::Duration::from_millis(500),

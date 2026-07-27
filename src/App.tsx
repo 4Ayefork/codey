@@ -12,7 +12,14 @@ import {
 import { invoke } from "./api";
 import { formatBytes, TraceLogModule, type TraceLogStats } from "./TraceLogModule";
 import { CodexAppPathDialog, ConfirmationDialog, ModelPickerDialog } from "./AppDialogs";
-import { AppUpdateCard, FeaturePolicyCard, ModelSection, OperationsPanel, WebhookCard } from "./AppSections";
+import {
+  AppUpdateCard,
+  ExperimentalFeaturesCard,
+  FeaturePolicyCard,
+  ModelSection,
+  OperationsPanel,
+  WebhookCard,
+} from "./AppSections";
 import type {
   AppProps,
   CcSwitchStatus,
@@ -358,6 +365,23 @@ export function App({ embedded = false, onClose }: AppProps) {
         text: result.restartRequired
           ? `已读取「${result.ccSwitch.provider.name}」，重启 Codex 后应用线路`
           : `已同步「${result.ccSwitch.provider.name}」`,
+      });
+    });
+  }
+
+  async function syncOfficialExperimentalFeatures() {
+    if (!config) return;
+    await runOperation("sync-experimental-features", async () => {
+      const result = await invoke<{
+        experimentalFeatures: Config["experimentalFeatures"];
+      }>("sync_official_experimental_features");
+      editConfig({
+        ...config,
+        experimentalFeatures: result.experimentalFeatures,
+      });
+      setNotice({
+        tone: "info",
+        text: "已同步官方试验性功能配置，保存并重启 Codex 后生效",
       });
     });
   }
@@ -825,6 +849,14 @@ export function App({ embedded = false, onClose }: AppProps) {
                 webhookResult={webhookResult}
                 onWebhookChange={updateWebhook}
                 onTestWebhook={() => void testWebhook()}
+              />
+
+              <ExperimentalFeaturesCard
+                config={config}
+                busy={busy}
+                isBusy={isBusy}
+                onConfigChange={editConfig}
+                onSyncOfficial={() => void syncOfficialExperimentalFeatures()}
               />
             </div>
 

@@ -22,7 +22,7 @@ use crate::codex_config::{
     apply_runtime_provider_config, codex_home, ensure_global_model_provider,
     restore_runtime_provider_config,
 };
-use crate::config::{CodeyConfig, GpuLaunchMode};
+use crate::config::{CodeyConfig, ExperimentalFeaturesConfig, GpuLaunchMode};
 use crate::maintenance_lock;
 use crate::model_catalog;
 use crate::pet_slim_patch;
@@ -94,6 +94,10 @@ pub struct CodeyRuntime {
 }
 
 impl CodeyRuntime {
+    pub async fn renderer_websocket_url(&self) -> Arc<str> {
+        self.injection_websocket_url.read().await.clone()
+    }
+
     pub async fn refresh_injection_statuses(&self) -> Arc<[cdp::InjectionScriptStatus]> {
         let websocket_url = self.injection_websocket_url.read().await.clone();
         let statuses = cdp::read_injection_statuses(&websocket_url, &self.injection_scripts)
@@ -285,6 +289,7 @@ impl CodeyRuntime {
             config.slim_codex_pet,
             config.slim_codex_voice,
             config.fast_codex_startup,
+            config.experimental_features,
             config.gpu_launch_mode,
         )
         .await
@@ -704,12 +709,14 @@ async fn spawn_codex(
     disable_codex_pet: bool,
     disable_codex_voice: bool,
     fast_codex_startup: bool,
+    experimental_features: ExperimentalFeaturesConfig,
     gpu_launch_mode: GpuLaunchMode,
 ) -> Result<SpawnedCodex> {
     let patch_options = crate::codex_startup_patch::PatchOptions {
         disable_pet: disable_codex_pet,
         disable_voice: disable_codex_voice,
         fast_codex_startup,
+        experimental_features,
     };
     let gpu_arguments = gpu_launch_arguments(gpu_launch_mode, !cfg!(target_os = "macos"));
 

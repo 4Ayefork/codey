@@ -17,7 +17,8 @@ async function loadPatchExpression() {
   return template
     .replaceAll("__DISABLE_PET__", "false")
     .replaceAll("__DISABLE_VOICE__", "false")
-    .replaceAll("__FAST_CODEX_STARTUP__", "true");
+    .replaceAll("__FAST_CODEX_STARTUP__", "true")
+    .replaceAll("__EXPERIMENTAL_FEATURE_OVERRIDES__", "{}");
 }
 
 async function withWindowsPlatform(run) {
@@ -40,7 +41,7 @@ test("Windows lag patch bypasses only the recurring WMI snapshot worker", async 
 
     try {
       const expression = await loadPatchExpression();
-      assert.equal((0, eval)(expression), "codey-startup-patch-installed-v14");
+      assert.equal((0, eval)(expression), "codey-startup-patch-installed-v15");
 
       const blocked = new workerThreads.Worker(
         "C:\\Codex\\resources\\app\\.vite\\build\\child-process-snapshot-worker.js",
