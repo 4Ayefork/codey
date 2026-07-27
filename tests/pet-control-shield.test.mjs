@@ -9,10 +9,11 @@ const template = readFileSync(
 );
 
 class FakeElement {
-  constructor(text = "") {
+  constructor(text = "", isControl = true) {
     this.textContent = text;
     this.attributes = new Map();
     this.disabled = false;
+    this.isControl = isControl;
     this.style = {
       setProperty: (name, value, priority) => {
         this.style[name] = `${value}:${priority}`;
@@ -29,7 +30,11 @@ class FakeElement {
   }
 
   closest() {
-    return this;
+    return this.isControl ? this : null;
+  }
+
+  contains() {
+    return false;
   }
 
   matches() {
@@ -62,7 +67,7 @@ function loadShield(enabled) {
       observerDisconnected = true;
     }
   }
-  const documentElement = new FakeElement();
+  const documentElement = new FakeElement("", false);
   const document = {
     documentElement,
     querySelectorAll: () => controls,
@@ -71,6 +76,24 @@ function loadShield(enabled) {
   };
   const window = {};
   window.window = window;
+  const pendingTimers = new Map();
+  let nextTimerId = 1;
+  let scheduledFlushes = 0;
+  window.setTimeout = (callback) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    scheduledFlushes += 1;
+    pendingTimers.set(id, callback);
+    return id;
+  };
+  window.clearTimeout = (id) => {
+    pendingTimers.delete(id);
+  };
+  const runPendingTimers = () => {
+    const callbacks = [...pendingTimers.values()];
+    pendingTimers.clear();
+    callbacks.forEach((callback) => callback());
+  };
   vm.runInNewContext(
     template.replace("__CODEY_SLIM_PET__", enabled ? "true" : "false"),
     {
@@ -78,6 +101,7 @@ function loadShield(enabled) {
       Element: FakeElement,
       HTMLElement: FakeElement,
       MutationObserver: FakeMutationObserver,
+      WeakMap,
       window,
     },
   );
@@ -90,6 +114,13 @@ function loadShield(enabled) {
     localized,
     mutationCallback,
     observerOptions,
+    get pendingTimerCount() {
+      return pendingTimers.size;
+    },
+    runPendingTimers,
+    get scheduledFlushes() {
+      return scheduledFlushes;
+    },
     semantic,
     unrelated,
     window,
@@ -136,6 +167,7 @@ test("pet slim mode blocks controls in the insertion observer callback", () => {
     target: runtime.documentElement,
     type: "childList",
   }]);
+  runtime.runPendingTimers();
 
   assert.equal(dynamic.getAttribute("data-codey-pet-control-blocked"), "true");
   assert.equal(dynamic.getAttribute("aria-hidden"), "true");
@@ -146,6 +178,65 @@ test("pet slim mode blocks controls in the insertion observer callback", () => {
   assert.deepEqual([...runtime.observerOptions.attributeFilter], ["aria-label", "role", "title"]);
   assert.equal(runtime.observerOptions.childList, true);
   assert.equal(runtime.observerOptions.subtree, true);
+});
+
+test("streaming mutation batches coalesce into a single deferred sweep", () => {
+  const runtime = loadShield(true);
+  const flushesAfterLoad = runtime.scheduledFlushes;
+  const dynamics = Array.from({ length: 12 }, (_, index) => new FakeElement(`节点${index}`));
+
+  dynamics.forEach((node) => {
+    runtime.mutationCallback([{
+      addedNodes: [node],
+      target: runtime.documentElement,
+      type: "childList",
+    }]);
+  });
+
+  assert.equal(
+    runtime.scheduledFlushes - flushesAfterLoad,
+    1,
+    "a sustained mutation stream must not schedule one flush per batch",
+  );
+  assert.equal(runtime.pendingTimerCount, 1);
+
+  runtime.runPendingTimers();
+  assert.equal(runtime.pendingTimerCount, 0);
+});
+
+test("pet control verdicts are cached until an observed attribute changes", () => {
+  const runtime = loadShield(true);
+  // Plain label so the cheap text heuristic cannot short-circuit the fiber walk.
+  const control = new FakeElement("打开设置");
+  let fiberReads = 0;
+  let fiberProps = { children: { props: { id: "codex.command.openPetOverlay" } } };
+  Object.defineProperty(control, "__reactProps$test", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      fiberReads += 1;
+      return fiberProps;
+    },
+  });
+
+  const evaluate = () => runtime.window.__codeyPetControlShield.isPetControl(control);
+  assert.equal(evaluate(), true);
+  assert.equal(fiberReads, 1);
+  evaluate();
+  evaluate();
+  assert.equal(fiberReads, 1, "repeat verdicts must not re-walk the React fiber");
+
+  fiberProps = {};
+  assert.equal(evaluate(), true, "a stale cached verdict is expected until invalidation");
+
+  runtime.mutationCallback([{
+    attributeName: "aria-label",
+    target: control,
+    type: "attributes",
+  }]);
+  runtime.runPendingTimers();
+
+  assert.equal(evaluate(), false, "an observed attribute change must invalidate the cached verdict");
 });
 
 test("pet shield cleanup disconnects the insertion observer", () => {

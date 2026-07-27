@@ -630,9 +630,15 @@ impl SQLiteStorageAdapter {
                     json!({"status": "failed", "message": "Unsupported local storage schema", "sort_keys": []}),
                 );
             }
+            // The column probe and the statement are identical for every id, so
+            // hoisting them turns ~3 statements per thread into 2 in total.
+            let mut columns = vec!["id".to_string()];
+            columns.extend(codex_thread_timestamp_columns(&db)?);
+            let sql = format!("SELECT {} FROM threads WHERE id = ?1", columns.join(", "));
+            let mut stmt = db.prepare(&sql)?;
             let mut sort_keys = Vec::new();
             for thread_id in thread_ids {
-                if let Some(mut payload) = fetch_thread_timestamp_payload(&db, &thread_id)? {
+                if let Some(mut payload) = fetch_thread_timestamp_row(&mut stmt, &columns, &thread_id)? {
                     payload.insert("session_id".to_string(), json!(thread_id));
                     sort_keys.push(Value::Object(payload));
                 }
@@ -1538,6 +1544,16 @@ fn fetch_thread_timestamp_payload(
     columns.extend(timestamp_columns);
     let sql = format!("SELECT {} FROM threads WHERE id = ?1", columns.join(", "));
     let mut stmt = db.prepare(&sql)?;
+    fetch_thread_timestamp_row(&mut stmt, &columns, thread_id)
+}
+
+/// Shared by the single-thread lookup and the batched sort-key path, which
+/// prepares the statement once and reuses it across every requested thread.
+fn fetch_thread_timestamp_row(
+    stmt: &mut rusqlite::Statement<'_>,
+    columns: &[String],
+    thread_id: &str,
+) -> anyhow::Result<Option<Map<String, Value>>> {
     let row = stmt.query_row([thread_id], |row| {
         let mut selected = Map::new();
         for (index, column) in columns.iter().enumerate() {

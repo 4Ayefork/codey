@@ -28,8 +28,7 @@
     return false;
   };
 
-  const isPetControl = (control) => {
-    if (!(control instanceof HTMLElement)) return false;
+  const evaluatePetControl = (control) => {
     const descriptor = [
       control.getAttribute("aria-label"),
       control.getAttribute("title"),
@@ -47,6 +46,21 @@
           return false;
         }
       });
+  };
+
+  // The React fiber walk below is the expensive part of this shield, so the
+  // verdict is memoised per element. Entries are dropped when one of the
+  // observed attributes changes, which is the only way a verdict can flip.
+  const petControlVerdicts = typeof WeakMap === "function" ? new WeakMap() : null;
+
+  const isPetControl = (control) => {
+    if (!(control instanceof HTMLElement)) return false;
+    if (!petControlVerdicts) return evaluatePetControl(control);
+    const cached = petControlVerdicts.get(control);
+    if (cached !== undefined) return cached;
+    const verdict = evaluatePetControl(control);
+    petControlVerdicts.set(control, verdict);
+    return verdict;
   };
 
   const controlsWithin = (root, selector) => {
@@ -94,23 +108,74 @@
   }
 
   let controlObserver = null;
+  let flushTimer = 0;
+  const pendingRoots = new Set();
+  const pendingRootLimit = 64;
+
+  const addPendingRoot = (root) => {
+    if (!(root instanceof HTMLElement) || pendingRoots.has(root)) return;
+    if (pendingRoots.has(document.documentElement)) return;
+    if (pendingRoots.size >= pendingRootLimit) {
+      // Collapse instead of tracking an unbounded root set during heavy
+      // streaming; one document sweep is cheaper than hundreds of subtrees.
+      pendingRoots.clear();
+      pendingRoots.add(document.documentElement);
+      return;
+    }
+    for (const pending of pendingRoots) {
+      if (pending.contains?.(root)) return;
+    }
+    for (const pending of [...pendingRoots]) {
+      if (root.contains?.(pending)) pendingRoots.delete(pending);
+    }
+    pendingRoots.add(root);
+  };
+
+  const flushPendingRoots = () => {
+    flushTimer = 0;
+    if (!pendingRoots.size) return;
+    const roots = [...pendingRoots];
+    pendingRoots.clear();
+    for (const root of roots) {
+      if (root.isConnected === false) continue;
+      block(root);
+    }
+  };
+
+  const schedulePendingFlush = () => {
+    // Deliberately non-resetting: a sustained mutation stream must not be able
+    // to starve the flush indefinitely.
+    if (flushTimer) return;
+    if (typeof window.setTimeout !== "function") {
+      flushPendingRoots();
+      return;
+    }
+    flushTimer = window.setTimeout(flushPendingRoots, 50);
+  };
+
   if (typeof MutationObserver === "function" && document.documentElement) {
     const mutationRoot = (node) => {
       if (node instanceof HTMLElement) return node;
       return node?.parentElement instanceof HTMLElement ? node.parentElement : null;
     };
     controlObserver = new MutationObserver((mutations) => {
-      const roots = new Set();
-      mutations.forEach((mutation) => {
+      for (const mutation of mutations) {
         const target = mutationRoot(mutation.target);
-        const containingControl = target?.closest?.(controlSelector);
-        if (containingControl) roots.add(containingControl);
-        for (const node of mutation.addedNodes || []) {
-          const root = mutationRoot(node);
-          if (root instanceof HTMLElement) roots.add(root);
+        if (mutation.type === "attributes") {
+          // aria-label / role / title drive the label heuristic, so the cached
+          // verdict for this element is no longer trustworthy.
+          if (target) petControlVerdicts?.delete(target);
+          const containingControl = target?.closest?.(controlSelector);
+          if (containingControl) addPendingRoot(containingControl);
+          continue;
         }
-      });
-      roots.forEach((root) => block(root));
+        const containingControl = target?.closest?.(controlSelector);
+        if (containingControl) addPendingRoot(containingControl);
+        for (const node of mutation.addedNodes || []) {
+          addPendingRoot(mutationRoot(node));
+        }
+      }
+      if (pendingRoots.size) schedulePendingFlush();
     });
     controlObserver.observe(document.documentElement, {
       attributes: true,
@@ -138,6 +203,11 @@
   window.__codeyPetControlShield = Object.freeze({ enabled, block, isPetControl });
   window.__codeyPetControlShieldCleanup = () => {
     controlObserver?.disconnect();
+    if (flushTimer && typeof window.clearTimeout === "function") {
+      window.clearTimeout(flushTimer);
+    }
+    flushTimer = 0;
+    pendingRoots.clear();
     eventNames.forEach((eventName) => {
       document.removeEventListener(eventName, stopPetControlEvent, true);
     });

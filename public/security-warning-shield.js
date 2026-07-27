@@ -26,8 +26,10 @@
   let scanTimer = 0;
   let observer = null;
 
+  // innerText forces a layout flush; the action labels this shield matches are
+  // plain text nodes, so textContent is both sufficient and layout-free.
   const normalizedText = (element) => String(
-    element?.innerText || element?.textContent || "",
+    element?.textContent || "",
   ).replace(/\s+/g, " ").trim();
 
   const matchesAny = (value, patterns) => patterns.some((pattern) => pattern.test(value));
@@ -90,6 +92,7 @@
         window.clearTimeout?.(scanTimer);
         scanTimer = 0;
       }
+      pendingRoots.clear();
       observer?.disconnect?.();
       observer = null;
     }
@@ -108,11 +111,36 @@
     }
   };
 
+  const pendingRoots = new Set();
+  const pendingRootLimit = 32;
+
+  const addPendingRoot = (root) => {
+    if (!(root instanceof Element)) return;
+    if (pendingRoots.has(document.documentElement)) return;
+    if (pendingRoots.size >= pendingRootLimit) {
+      pendingRoots.clear();
+      pendingRoots.add(document.documentElement);
+      return;
+    }
+    pendingRoots.add(root);
+  };
+
   const scheduleScan = () => {
     if (!enabled || scanTimer) return;
     scanTimer = window.setTimeout(() => {
       scanTimer = 0;
-      dismissWarnings();
+      if (!pendingRoots.size) {
+        dismissWarnings();
+        return;
+      }
+      const roots = [...pendingRoots];
+      pendingRoots.clear();
+      // Scanning only the inserted subtrees avoids a full-document button sweep
+      // on every batch of DOM churn.
+      roots.forEach((root) => {
+        if (root.isConnected === false) return;
+        dismissWarnings(root);
+      });
     }, 40);
   };
 
@@ -120,9 +148,15 @@
     if (observer || typeof MutationObserver !== "function" || !document.documentElement) return;
     observer = new MutationObserver((mutations) => {
       if (!enabled) return;
-      if (mutations.some((mutation) => (mutation.addedNodes?.length || 0) > 0)) {
-        scheduleScan();
+      let added = false;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes || []) {
+          if (!(node instanceof Element)) continue;
+          added = true;
+          addPendingRoot(node);
+        }
       }
+      if (added) scheduleScan();
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
   };

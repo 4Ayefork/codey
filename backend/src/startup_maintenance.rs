@@ -2,6 +2,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -148,25 +151,88 @@ fn provider_state_matches(home: &Path, target_provider: &str) -> Result<bool> {
     sqlite_providers_match(home, target_provider)
 }
 
+const HEADER_VALIDATION_MAX_THREADS: usize = 4;
+
+/// Validates rollout headers across session directories. Work is sharded by
+/// directory rather than by a precollected file list, so hundreds of small
+/// header reads overlap without holding every rollout path in memory.
 fn rollout_headers_match(home: &Path, target_provider: &str) -> Result<bool> {
+    let mut directories = Vec::new();
     for dirname in SESSION_DIRS {
         let root = home.join(dirname);
-        if root.exists() && !rollout_directory_headers_match(&root, target_provider)? {
-            return Ok(false);
+        if root.exists() {
+            collect_rollout_directories(&root, &mut directories)?;
         }
     }
-    Ok(true)
+    if directories.is_empty() {
+        return Ok(true);
+    }
+
+    let workers = thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .min(HEADER_VALIDATION_MAX_THREADS)
+        .min(directories.len())
+        .max(1);
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let mismatch = AtomicBool::new(false);
+    let failure: Mutex<Option<anyhow::Error>> = Mutex::new(None);
+
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(directory) = directories.get(index) else {
+                        break;
+                    };
+                    match rollout_directory_headers_match(directory, target_provider) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            mismatch.store(true, Ordering::Relaxed);
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            let mut slot = failure.lock().unwrap_or_else(|slot| slot.into_inner());
+                            if slot.is_none() {
+                                *slot = Some(error);
+                            }
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    if let Some(error) = failure.lock().unwrap_or_else(|slot| slot.into_inner()).take() {
+        return Err(error);
+    }
+    Ok(!mismatch.load(Ordering::Relaxed))
 }
 
+fn collect_rollout_directories(root: &Path, directories: &mut Vec<PathBuf>) -> Result<()> {
+    directories.push(root.to_path_buf());
+    for entry in
+        fs::read_dir(root).with_context(|| format!("扫描会话目录失败：{}", root.display()))?
+    {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_rollout_directories(&path, directories)?;
+        }
+    }
+    Ok(())
+}
+
+/// Checks the rollout headers directly inside `root`; subdirectories are
+/// scheduled separately by `rollout_headers_match`.
 fn rollout_directory_headers_match(root: &Path, target_provider: &str) -> Result<bool> {
     for entry in
         fs::read_dir(root).with_context(|| format!("扫描会话目录失败：{}", root.display()))?
     {
         let path = entry?.path();
         if path.is_dir() {
-            if !rollout_directory_headers_match(&path, target_provider)? {
-                return Ok(false);
-            }
             continue;
         }
         if !path

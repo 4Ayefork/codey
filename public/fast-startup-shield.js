@@ -185,12 +185,28 @@
 
   patchStatsigClients();
   const startedAt = Date.now();
-  const clientScanTimer = window.setInterval(() => {
+  // Statsig clients are almost always constructed in the first moments after
+  // boot, so the tight poll only needs to cover that window; keeping it at
+  // 50 ms for the full 15 s competes with the startup it is meant to speed up.
+  const fastScanWindowMs = 1000;
+  const fastScanIntervalMs = 50;
+  const slowScanIntervalMs = 250;
+  let clientScanTimer = 0;
+  let scanIntervalMs = fastScanIntervalMs;
+  const scanForStatsigClients = () => {
     patchStatsigClients();
-    if (Date.now() - startedAt >= 15000) {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= 15000) {
       window.clearInterval(clientScanTimer);
+      return;
     }
-  }, 50);
+    if (scanIntervalMs === fastScanIntervalMs && elapsed >= fastScanWindowMs) {
+      scanIntervalMs = slowScanIntervalMs;
+      window.clearInterval(clientScanTimer);
+      clientScanTimer = window.setInterval(scanForStatsigClients, slowScanIntervalMs);
+    }
+  };
+  clientScanTimer = window.setInterval(scanForStatsigClients, fastScanIntervalMs);
   window.setTimeout(() => {
     state.active = false;
     if (window.fetch === patchedFetch) window.fetch = originalFetch;

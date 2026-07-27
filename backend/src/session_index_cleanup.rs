@@ -79,14 +79,39 @@ pub fn cleanup(home: &Path) -> Result<SessionIndexCleanupReport> {
     if !home.exists() {
         return Ok(SessionIndexCleanupReport::default());
     }
+    let index_path = home.join("session_index.jsonl");
+    // collect_live_thread_ids walks every rollout and runs full-table scans over
+    // each Codex database, so it must not run before we know the index has
+    // entries that could actually be pruned.
+    if !index_path.exists() {
+        return Ok(SessionIndexCleanupReport::default());
+    }
     let _lock = CleanupLock::acquire(home)?;
-    let live_thread_ids = collect_live_thread_ids(home)?;
-    let Some(plan) = plan_cleanup(&home.join("session_index.jsonl"), &live_thread_ids)? else {
+    let Some(plan) = plan_cleanup_matching(&index_path, |_| true)? else {
+        return Ok(SessionIndexCleanupReport::default());
+    };
+    if plan.candidates.is_empty() {
         return Ok(SessionIndexCleanupReport {
+            scanned_entries: plan.scanned_entries,
+            ..SessionIndexCleanupReport::default()
+        });
+    }
+    let live_thread_ids = collect_live_thread_ids(home)?;
+    let plan = CleanupPlan {
+        candidates: plan
+            .candidates
+            .into_iter()
+            .filter(|candidate| !live_thread_ids.contains(&candidate.id))
+            .collect(),
+        ..plan
+    };
+    if plan.candidates.is_empty() {
+        return Ok(SessionIndexCleanupReport {
+            scanned_entries: plan.scanned_entries,
             live_threads: live_thread_ids.len(),
             ..SessionIndexCleanupReport::default()
         });
-    };
+    }
     apply_cleanup_plan(home, plan, live_thread_ids.len(), true)
 }
 
@@ -317,10 +342,6 @@ fn table_columns(db: &Connection, table: &str) -> Result<HashSet<String>> {
     Ok(statement
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<HashSet<_>>>()?)
-}
-
-fn plan_cleanup(path: &Path, live_thread_ids: &HashSet<String>) -> Result<Option<CleanupPlan>> {
-    plan_cleanup_matching(path, |candidate| !live_thread_ids.contains(&candidate.id))
 }
 
 fn plan_cleanup_matching(

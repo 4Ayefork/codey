@@ -119,6 +119,13 @@
   const pluginRequestPattern = /plugin|marketplace|list-plugins|install-plugin|uninstall-plugin/i;
   const pluginMutationPattern = /install-plugin|uninstall-plugin/i;
   const directRequestKeys = ["channel", "command", "method", "action", "type", "path", "topic", "url"];
+  // requestValueMatchesMethod only ever matches a string that ends with the
+  // method name, so the raw text must contain it literally. Scanning for the
+  // substring is orders of magnitude cheaper than parsing a large body just to
+  // discover it was irrelevant.
+  const mayContainMethod = (text, method) => (
+    typeof text === "string" && text.toLowerCase().includes(method.toLowerCase())
+  );
   const requestValueMatchesMethod = (value, method) => {
     if (typeof value !== "string") return false;
     const normalized = value.trim().toLowerCase().split(/[?#]/, 1)[0];
@@ -159,7 +166,7 @@
       if (child && typeof child === "object" && requestHasMethod(child, method, depth + 1, seen, budget)) {
         return true;
       }
-      if (key === "body" && typeof child === "string") {
+      if (key === "body" && typeof child === "string" && mayContainMethod(child, method)) {
         try {
           if (requestHasMethod(JSON.parse(child), method, depth + 1, seen, budget)) return true;
         } catch {}
@@ -290,7 +297,7 @@
       let isPluginListRequest = requestValueMatchesMethod(url, "list-plugins");
       if (!isPluginListRequest && body && typeof body === "object") {
         isPluginListRequest = requestHasMethod(body, "list-plugins");
-      } else if (!isPluginListRequest && typeof body === "string") {
+      } else if (!isPluginListRequest && mayContainMethod(body, "list-plugins")) {
         try {
           isPluginListRequest = requestHasMethod(JSON.parse(body), "list-plugins");
         } catch {}

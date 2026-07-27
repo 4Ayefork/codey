@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -83,11 +84,222 @@ struct ParsedRolloutEvents {
     status: SessionLifecycleStatus,
 }
 
+/// Resumable rollout parser. Rollout JSONL is append-only in normal operation,
+/// so a poll that sees a grown file only has to parse the appended bytes
+/// instead of the whole history.
+#[derive(Debug, Clone, Default)]
+struct RolloutParseState {
+    consumed_bytes: u64,
+    /// Trailing bytes of the region already consumed. Re-reading just these
+    /// detects an in-place rewrite (Codey itself rewrites rollouts when
+    /// deleting turns or normalising providers), which must force a full
+    /// re-parse instead of appending to stale state.
+    tail_fingerprint: Vec<u8>,
+    is_subagent: bool,
+    current_turn_id: String,
+    waiting_calls: HashMap<String, String>,
+    terminal_turns: HashSet<String>,
+    active_turns: HashSet<String>,
+    latest_terminal: SessionLifecycleStatus,
+    events: ParsedRolloutEvents,
+}
+
+const ROLLOUT_TAIL_FINGERPRINT_LEN: usize = 64;
+
+impl RolloutParseState {
+    /// Consumes whole lines from `chunk`, returning how many bytes were taken.
+    /// A trailing partial line is only consumed once it parses as a complete
+    /// JSON record, so a rollout caught mid-write resumes cleanly.
+    fn consume(&mut self, chunk: &str) -> usize {
+        if self.is_subagent {
+            return chunk.len();
+        }
+        let mut consumed = 0usize;
+        for segment in chunk.split_inclusive('\n') {
+            let is_complete_line = segment.ends_with('\n');
+            let line = segment.trim_end_matches(['\n', '\r']);
+            if !is_complete_line {
+                if line.trim().is_empty() {
+                    break;
+                }
+                let Ok(record) = serde_json::from_str::<Value>(line) else {
+                    break;
+                };
+                consumed += segment.len();
+                self.apply(&record);
+                break;
+            }
+            consumed += segment.len();
+            if let Ok(record) = serde_json::from_str::<Value>(line) {
+                self.apply(&record);
+            }
+            if self.is_subagent {
+                return chunk.len();
+            }
+        }
+        consumed
+    }
+
+    fn advance(&mut self, chunk: &str, consumed: usize) {
+        if consumed == 0 {
+            return;
+        }
+        self.consumed_bytes += consumed as u64;
+        let taken = &chunk.as_bytes()[..consumed];
+        if taken.len() >= ROLLOUT_TAIL_FINGERPRINT_LEN {
+            self.tail_fingerprint = taken[taken.len() - ROLLOUT_TAIL_FINGERPRINT_LEN..].to_vec();
+        } else {
+            self.tail_fingerprint.extend_from_slice(taken);
+            let overflow = self
+                .tail_fingerprint
+                .len()
+                .saturating_sub(ROLLOUT_TAIL_FINGERPRINT_LEN);
+            if overflow > 0 {
+                self.tail_fingerprint.drain(..overflow);
+            }
+        }
+    }
+
+    fn apply(&mut self, record: &Value) {
+        let Some(payload) = record.get("payload") else {
+            return;
+        };
+        match record.get("type").and_then(Value::as_str) {
+            Some("session_meta") if is_subagent_payload(payload) => {
+                self.is_subagent = true;
+            }
+            Some("turn_context") => {
+                if let Some(turn_id) = payload.get("turn_id").and_then(Value::as_str) {
+                    self.current_turn_id = turn_id.to_string();
+                    let model = payload
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let reasoning_effort = payload
+                        .get("effort")
+                        .or_else(|| payload.get("reasoning_effort"))
+                        .or_else(|| payload.get("reasoningEffort"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !model.is_empty() || !reasoning_effort.is_empty() {
+                        self.events.turn_configurations.insert(
+                            turn_id.to_string(),
+                            TurnConfiguration {
+                                model,
+                                reasoning_effort,
+                            },
+                        );
+                    }
+                }
+            }
+            Some("event_msg") => {
+                let Some(turn_id) = payload
+                    .get("turn_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|turn_id| !turn_id.is_empty())
+                else {
+                    return;
+                };
+                match payload.get("type").and_then(Value::as_str) {
+                    Some("task_started") => {
+                        self.active_turns.insert(turn_id.to_string());
+                        self.events.started_turns.push(turn_id.to_string());
+                    }
+                    Some("task_complete") => {
+                        self.terminal_turns.insert(turn_id.to_string());
+                        self.active_turns.remove(turn_id);
+                        let error = task_completion_error(payload);
+                        self.latest_terminal = if error.is_some() {
+                            SessionLifecycleStatus::Error
+                        } else {
+                            SessionLifecycleStatus::Idle
+                        };
+                        self.events.completed_turns.push((
+                            turn_id.to_string(),
+                            payload
+                                .get("duration_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or_default() as u128,
+                            payload.get("completed_at").and_then(Value::as_i64),
+                            error,
+                        ));
+                    }
+                    Some("turn_aborted") => {
+                        self.terminal_turns.insert(turn_id.to_string());
+                        self.active_turns.remove(turn_id);
+                        self.latest_terminal = SessionLifecycleStatus::Idle;
+                        self.events.aborted_turns.push(turn_id.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            Some("response_item") => match payload.get("type").and_then(Value::as_str) {
+                Some("function_call") => {
+                    let name = payload
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !matches!(name, "request_permissions" | "request_user_input") {
+                        return;
+                    }
+                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
+                        return;
+                    };
+                    let turn_id = payload
+                        .get("internal_chat_message_metadata_passthrough")
+                        .and_then(|metadata| metadata.get("turn_id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(&self.current_turn_id);
+                    self.waiting_calls
+                        .insert(call_id.to_string(), turn_id.to_string());
+                }
+                Some("function_call_output") => {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                        self.waiting_calls.remove(call_id);
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn snapshot(&self) -> Option<ParsedRolloutEvents> {
+        if self.is_subagent {
+            return None;
+        }
+        let mut parsed = self.events.clone();
+        parsed.pending_approvals = self
+            .waiting_calls
+            .iter()
+            .filter(|(_, turn_id)| {
+                !turn_id.is_empty() && !self.terminal_turns.contains(turn_id.as_str())
+            })
+            .map(|(call_id, turn_id)| (turn_id.clone(), call_id.clone()))
+            .collect();
+        parsed.pending_approvals.sort();
+        parsed.status = if !parsed.pending_approvals.is_empty() {
+            SessionLifecycleStatus::Waiting
+        } else if !self.active_turns.is_empty() {
+            SessionLifecycleStatus::Running
+        } else {
+            self.latest_terminal
+        };
+        Some(parsed)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedRolloutEvents {
     session_id: String,
     signature: RolloutSignature,
     parsed: Option<ParsedRolloutEvents>,
+    state: RolloutParseState,
 }
 
 #[derive(Debug)]
@@ -102,6 +314,8 @@ pub struct RecentSessionEventCache {
     database_connections: HashMap<PathBuf, CachedDatabaseConnection>,
     #[cfg(test)]
     parse_count: usize,
+    #[cfg(test)]
+    incremental_parse_count: usize,
     #[cfg(test)]
     database_open_count: usize,
 }
@@ -206,20 +420,35 @@ impl RecentSessionEventCache {
                 cached.session_id == session_id && cached.signature == signature
             });
             if !cache_is_current {
-                let Ok(contents) = fs::read_to_string(&rollout_path) else {
+                // Reuse the resumable parser state when the file only grew and
+                // its consumed prefix is intact; otherwise start from scratch.
+                let resumable = self
+                    .rollouts
+                    .get(&rollout_path)
+                    .filter(|cached| cached.session_id == session_id)
+                    .map(|cached| cached.state.clone())
+                    .filter(|state| state.consumed_bytes > 0);
+                let Some((mut state, chunk)) = read_rollout_update(&rollout_path, resumable) else {
                     self.rollouts.remove(&rollout_path);
                     continue;
                 };
                 #[cfg(test)]
                 {
                     self.parse_count += 1;
+                    if state.consumed_bytes > 0 {
+                        self.incremental_parse_count += 1;
+                    }
                 }
+                let consumed = state.consume(&chunk);
+                state.advance(&chunk, consumed);
+                let parsed = state.snapshot();
                 self.rollouts.insert(
                     rollout_path.clone(),
                     CachedRolloutEvents {
                         session_id: session_id.clone(),
                         signature: signature.clone(),
-                        parsed: parse_rollout_events(&contents),
+                        parsed,
+                        state,
                     },
                 );
             }
@@ -298,137 +527,53 @@ impl RecentSessionEventCache {
     }
 }
 
-fn parse_rollout_events(contents: &str) -> Option<ParsedRolloutEvents> {
-    let mut parsed = ParsedRolloutEvents::default();
-    let mut current_turn_id = String::new();
-    let mut waiting_calls = HashMap::<String, String>::new();
-    let mut terminal_turns = HashSet::<String>::new();
-    let mut active_turns = HashSet::<String>::new();
-    let mut latest_terminal = SessionLifecycleStatus::Idle;
-
-    for line in contents.lines() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(payload) = record.get("payload") else {
-            continue;
-        };
-        match record.get("type").and_then(Value::as_str) {
-            Some("session_meta") if is_subagent_payload(payload) => return None,
-            Some("turn_context") => {
-                if let Some(turn_id) = payload.get("turn_id").and_then(Value::as_str) {
-                    current_turn_id = turn_id.to_string();
-                    let model = payload
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    let reasoning_effort = payload
-                        .get("effort")
-                        .or_else(|| payload.get("reasoning_effort"))
-                        .or_else(|| payload.get("reasoningEffort"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    if !model.is_empty() || !reasoning_effort.is_empty() {
-                        parsed.turn_configurations.insert(
-                            turn_id.to_string(),
-                            TurnConfiguration {
-                                model,
-                                reasoning_effort,
-                            },
-                        );
-                    }
-                }
-            }
-            Some("event_msg") => {
-                let Some(turn_id) = payload
-                    .get("turn_id")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|turn_id| !turn_id.is_empty())
-                else {
-                    continue;
-                };
-                match payload.get("type").and_then(Value::as_str) {
-                    Some("task_started") => {
-                        active_turns.insert(turn_id.to_string());
-                        parsed.started_turns.push(turn_id.to_string());
-                    }
-                    Some("task_complete") => {
-                        terminal_turns.insert(turn_id.to_string());
-                        active_turns.remove(turn_id);
-                        let error = task_completion_error(payload);
-                        latest_terminal = if error.is_some() {
-                            SessionLifecycleStatus::Error
-                        } else {
-                            SessionLifecycleStatus::Idle
-                        };
-                        parsed.completed_turns.push((
-                            turn_id.to_string(),
-                            payload
-                                .get("duration_ms")
-                                .and_then(Value::as_u64)
-                                .unwrap_or_default() as u128,
-                            payload.get("completed_at").and_then(Value::as_i64),
-                            error,
-                        ));
-                    }
-                    Some("turn_aborted") => {
-                        terminal_turns.insert(turn_id.to_string());
-                        active_turns.remove(turn_id);
-                        latest_terminal = SessionLifecycleStatus::Idle;
-                        parsed.aborted_turns.push(turn_id.to_string());
-                    }
-                    _ => {}
-                }
-            }
-            Some("response_item") => match payload.get("type").and_then(Value::as_str) {
-                Some("function_call") => {
-                    let name = payload
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if !matches!(name, "request_permissions" | "request_user_input") {
-                        continue;
-                    }
-                    let Some(call_id) = payload.get("call_id").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let turn_id = payload
-                        .get("internal_chat_message_metadata_passthrough")
-                        .and_then(|metadata| metadata.get("turn_id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(&current_turn_id);
-                    waiting_calls.insert(call_id.to_string(), turn_id.to_string());
-                }
-                Some("function_call_output") => {
-                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
-                        waiting_calls.remove(call_id);
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-
-    parsed.pending_approvals = waiting_calls
-        .into_iter()
-        .filter(|(_, turn_id)| !turn_id.is_empty() && !terminal_turns.contains(turn_id))
-        .map(|(call_id, turn_id)| (turn_id, call_id))
-        .collect();
-    parsed.pending_approvals.sort();
-    parsed.status = if !parsed.pending_approvals.is_empty() {
-        SessionLifecycleStatus::Waiting
-    } else if !active_turns.is_empty() {
-        SessionLifecycleStatus::Running
-    } else {
-        latest_terminal
+/// Returns the parser state to continue from plus the text still to consume.
+/// Falls back to a fresh state and the whole file whenever the previously
+/// consumed prefix cannot be confirmed byte-for-byte.
+fn read_rollout_update(
+    path: &Path,
+    resumable: Option<RolloutParseState>,
+) -> Option<(RolloutParseState, String)> {
+    let full = || {
+        fs::read_to_string(path)
+            .ok()
+            .map(|contents| (RolloutParseState::default(), contents))
     };
-    Some(parsed)
+    let Some(state) = resumable else {
+        return full();
+    };
+    let fingerprint_len = state.tail_fingerprint.len() as u64;
+    if fingerprint_len == 0 || fingerprint_len > state.consumed_bytes {
+        return full();
+    }
+    let Ok(mut file) = fs::File::open(path) else {
+        return full();
+    };
+    match file.metadata() {
+        Ok(metadata) if metadata.len() >= state.consumed_bytes => {}
+        _ => return full(),
+    }
+    if file
+        .seek(SeekFrom::Start(state.consumed_bytes - fingerprint_len))
+        .is_err()
+    {
+        return full();
+    }
+    let mut fingerprint = vec![0u8; state.tail_fingerprint.len()];
+    if file.read_exact(&mut fingerprint).is_err() || fingerprint != state.tail_fingerprint {
+        return full();
+    }
+    let mut appended = String::new();
+    if file.read_to_string(&mut appended).is_err() {
+        return full();
+    }
+    Some((state, appended))
+}
+
+fn parse_rollout_events(contents: &str) -> Option<ParsedRolloutEvents> {
+    let mut state = RolloutParseState::default();
+    state.consume(contents);
+    state.snapshot()
 }
 
 fn is_subagent_payload(payload: &Value) -> bool {
@@ -713,6 +858,100 @@ mod tests {
         let updated = cache.refresh_rollouts(rollouts());
 
         assert_eq!(cache.parse_count, 2);
+        assert_eq!(
+            updated.session_statuses.get("thread-1"),
+            Some(&SessionLifecycleStatus::Idle)
+        );
+    }
+
+    #[test]
+    fn appended_rollout_lines_are_parsed_incrementally() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("rollout-thread-1.jsonl");
+        let mut contents =
+            String::from(r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#);
+        contents.push('\n');
+        // Pad past the fingerprint window so the resume check is meaningful.
+        for index in 0..40 {
+            contents.push_str(&format!(
+                "{{\"type\":\"turn_context\",\"payload\":{{\"turn_id\":\"turn-{index}\",\"model\":\"m\"}}}}\n"
+            ));
+        }
+        fs::write(&rollout_path, &contents).unwrap();
+        let rollouts = || vec![("thread-1".to_string(), rollout_path.clone())];
+        let mut cache = RecentSessionEventCache::default();
+
+        let first = cache.refresh_rollouts(rollouts());
+        assert_eq!(cache.incremental_parse_count, 0);
+        assert_eq!(
+            first.session_statuses.get("thread-1"),
+            Some(&SessionLifecycleStatus::Running)
+        );
+
+        let mut handle = fs::OpenOptions::new()
+            .append(true)
+            .open(&rollout_path)
+            .unwrap();
+        writeln!(
+            handle,
+            r#"{{"type":"event_msg","payload":{{"type":"task_complete","turn_id":"turn-1"}}}}"#
+        )
+        .unwrap();
+        drop(handle);
+
+        let updated = cache.refresh_rollouts(rollouts());
+
+        assert_eq!(
+            cache.incremental_parse_count, 1,
+            "an appended rollout must resume instead of re-reading the whole file"
+        );
+        assert_eq!(
+            updated.session_statuses.get("thread-1"),
+            Some(&SessionLifecycleStatus::Idle)
+        );
+        assert_eq!(updated.started_turns.len(), 1, "history must not be lost");
+        assert_eq!(updated.completed_turns.len(), 1);
+        assert_eq!(updated.turn_configurations["thread-1"].len(), 40);
+    }
+
+    #[test]
+    fn rewritten_rollouts_fall_back_to_a_full_parse() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("rollout-thread-1.jsonl");
+        let original = format!(
+            "{}\n{}\n",
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}"#
+        );
+        fs::write(&rollout_path, &original).unwrap();
+        let rollouts = || vec![("thread-1".to_string(), rollout_path.clone())];
+        let mut cache = RecentSessionEventCache::default();
+
+        let first = cache.refresh_rollouts(rollouts());
+        assert_eq!(first.started_turns.len(), 2);
+
+        // Codey rewrites rollouts in place when deleting turns; the cached
+        // prefix is then stale. Make the rewrite longer than the original so
+        // only the fingerprint check — not the shrink check — can catch it.
+        let rewritten = format!(
+            "{}\n{}\n{}\n",
+            r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-9"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-9"}}"#,
+            r#"{"type":"turn_context","payload":{"turn_id":"turn-9","model":"m"}}"#
+        );
+        assert!(rewritten.len() > original.len());
+        fs::write(&rollout_path, &rewritten).unwrap();
+
+        let updated = cache.refresh_rollouts(rollouts());
+
+        assert_eq!(
+            cache.incremental_parse_count, 0,
+            "an in-place rewrite must not be treated as an append"
+        );
+        assert_eq!(
+            updated.started_turns.iter().map(|turn| turn.turn_id.as_str()).collect::<Vec<_>>(),
+            vec!["turn-9"]
+        );
         assert_eq!(
             updated.session_statuses.get("thread-1"),
             Some(&SessionLifecycleStatus::Idle)

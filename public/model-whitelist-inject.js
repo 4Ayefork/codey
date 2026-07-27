@@ -247,7 +247,16 @@
     return catalogLoadPromise;
   };
 
+  // The wrapped getDynamicConfig already patches results on read, so the
+  // interaction-driven re-apply is only a safety net for clients created
+  // between events. Rescanning every Statsig memo cache on every pointerdown
+  // and focusin is far more often than that safety net needs.
+  let lastInteractionApply = 0;
+  const interactionApplyIntervalMs = 2_000;
   const handleInteraction = () => {
+    const now = Date.now();
+    if (now - lastInteractionApply < interactionApplyIntervalMs) return;
+    lastInteractionApply = now;
     applyModelWhitelist();
   };
   const handleFocus = () => {

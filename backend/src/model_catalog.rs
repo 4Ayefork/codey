@@ -233,13 +233,48 @@ pub fn is_available(home: &Path) -> bool {
         .is_some_and(|value| !catalog_models_from_value(&value).is_empty())
 }
 
+/// Signature of the catalog source files, used to reuse a parse across the
+/// back-to-back `refresh_for_provider` + `selection_state` calls on every
+/// launch and across repeated config-page lookups.
+type CatalogSignature = Vec<(u64, Option<std::time::SystemTime>)>;
+
+static OFFICIAL_ENTRIES_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<Option<(CatalogSignature, Vec<Value>)>>,
+> = std::sync::OnceLock::new();
+
+fn catalog_signature(paths: &[PathBuf]) -> CatalogSignature {
+    paths
+        .iter()
+        .map(|path| match fs::metadata(path) {
+            Ok(metadata) => (metadata.len(), metadata.modified().ok()),
+            Err(_) => (0, None),
+        })
+        .collect()
+}
+
 fn read_official_entries(home: &Path) -> Result<Vec<Value>> {
-    let paths = [home.join("models_cache.json"), home.join(relative_path())];
+    let paths = vec![home.join("models_cache.json"), home.join(relative_path())];
+    let signature = catalog_signature(&paths);
+    let cache = OFFICIAL_ENTRIES_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(guard) = cache.lock()
+        && let Some((cached_signature, entries)) = guard.as_ref()
+        && *cached_signature == signature
+    {
+        return Ok(entries.clone());
+    }
+    let entries = read_official_entries_uncached(&paths)?;
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((signature, entries.clone()));
+    }
+    Ok(entries)
+}
+
+fn read_official_entries_uncached(paths: &[PathBuf]) -> Result<Vec<Value>> {
     let mut catalogs = Vec::new();
     let mut has_native_cache = false;
     let mut last_error = None;
-    for (index, path) in paths.into_iter().enumerate() {
-        let bytes = match fs::read(&path) {
+    for (index, path) in paths.iter().enumerate() {
+        let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {

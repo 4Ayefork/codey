@@ -49,6 +49,9 @@
   `;
   let lastSelectedRow = null;
   let scanTimer = 0;
+  let scanDeadline = 0;
+  const scanDebounceMs = 60;
+  const maxScanLatencyMs = 250;
   const sidebarTitleCache = new Map();
   let watcherWakeTimer = 0;
   let deletePopoverCleanup = null;
@@ -64,6 +67,20 @@
   const threadUpdatedAtRows = new Set();
   const deletedSidebarSessionIds = new Map();
   const hardDeletedMessageKeys = new Set();
+  const messageSelectButtons = typeof WeakMap === "function" ? new WeakMap() : null;
+  const conversationTurnSelector = [
+    "[data-turn-key]",
+    "[data-message-author-role]",
+    "[data-testid=conversation-turn]",
+    "[data-message-id]",
+  ].join(", ");
+  const sidebarScanRootSelector = [
+    "header",
+    "nav",
+    "[data-app-action-sidebar-section]",
+    "[data-app-action-sidebar-thread-row]",
+    "[data-app-action-sidebar-project-row]",
+  ].join(", ");
   const deletedSidebarSessionTtlMs = 10 * 60 * 1000;
   const fallbackSessionExportMaxBytes = 64 * 1024 * 1024;
   const queryWithin = (root, selector) => {
@@ -1729,7 +1746,10 @@
       ? currentTurnRows
       : queryWithin(root, "[data-message-author-role], [data-testid=conversation-turn], [data-message-id]");
     let installed = false;
-    const sessionId = getSessionId();
+    // getSessionId() probes several document-wide attribute selectors, and its
+    // only consumer here is the hard-delete filter, which stays empty until the
+    // user actually hard-deletes a turn.
+    const sessionId = hardDeletedMessageKeys.size ? getSessionId() : "";
     rows.forEach((row) => {
       if (!(row instanceof HTMLElement)) return;
       const messageId = getMessageId(row);
@@ -1739,7 +1759,19 @@
         installed = true;
         return;
       }
-      if (row.querySelector("[data-codey-message-select]")) return;
+      // The select button is appended last, so querySelector walks nearly the
+      // whole turn subtree. Remember it per row and only fall back to the walk
+      // when the cached button is gone or React re-parented it.
+      const cachedButton = messageSelectButtons?.get(row);
+      const existingButton = cachedButton
+        && cachedButton.isConnected !== false
+        && cachedButton.parentElement === row
+        ? cachedButton
+        : row.querySelector("[data-codey-message-select]");
+      if (existingButton) {
+        messageSelectButtons?.set(row, existingButton);
+        return;
+      }
       row.dataset.codeyMessageId = messageId;
       const button = document.createElement("button");
       button.type = "button";
@@ -1755,6 +1787,7 @@
       });
       if (getComputedStyle(row).position === "static") row.style.position = "relative";
       row.appendChild(button);
+      messageSelectButtons?.set(row, button);
       installed = true;
     });
     if (installed) {
@@ -1767,6 +1800,17 @@
     window.__codeyBlockNativeVoiceControls?.(root);
     if (shouldIgnoreDeletedSidebarSessionRoot(root)) return;
     if (mountSettings) mountButton();
+    // Streaming output makes conversation turns by far the most frequent scan
+    // root. Sidebar controls can never live inside a turn, so running their
+    // installers there is a guaranteed-miss walk of the whole turn subtree.
+    if (
+      root instanceof HTMLElement
+      && root.matches?.(conversationTurnSelector)
+      && !root.matches?.(sidebarScanRootSelector)
+    ) {
+      installMessageSelection(root);
+      return;
+    }
     installSessionExportButtons(root);
     installTasksImportButton(root);
     installSessionDeleteButtons(root);
@@ -1812,15 +1856,8 @@
     "[data-codey-message-select]",
   ].join(", ");
   const scanBoundarySelector = [
-    "header",
-    "nav",
-    "[data-app-action-sidebar-section]",
-    "[data-app-action-sidebar-thread-row]",
-    "[data-app-action-sidebar-project-row]",
-    "[data-turn-key]",
-    "[data-message-author-role]",
-    "[data-testid=conversation-turn]",
-    "[data-message-id]",
+    sidebarScanRootSelector,
+    conversationTurnSelector,
   ].join(", ");
   const interactiveControlSelector = [
     "button",
@@ -1866,6 +1903,7 @@
   };
   const flushIncrementalScans = () => {
     scanTimer = 0;
+    scanDeadline = 0;
     const roots = [...pendingScanRoots]
       .filter((root) => root.isConnected !== false)
       .filter((root, index, candidates) => !candidates.some((
@@ -1878,8 +1916,13 @@
   };
   const scheduleIncrementalScan = (root) => {
     addPendingScanRoot(root);
+    const now = Date.now();
+    if (!scanDeadline) scanDeadline = now + maxScanLatencyMs;
+    // The debounce restarts on every batch, so a sustained mutation stream
+    // could otherwise defer the flush indefinitely while roots pile up.
+    const delay = Math.max(0, Math.min(scanDebounceMs, scanDeadline - now));
     window.clearTimeout(scanTimer);
-    scanTimer = window.setTimeout(flushIncrementalScans, 60);
+    scanTimer = window.setTimeout(flushIncrementalScans, delay);
   };
 
   new MutationObserver((mutations) => {
@@ -1893,16 +1936,22 @@
         }
         continue;
       }
+      // Depends only on mutation.target, so it is identical for every node in
+      // this record; streaming appends many text nodes per record.
+      let interactiveRoot;
+      const interactiveRootFor = () => {
+        if (interactiveRoot === undefined) {
+          interactiveRoot = target?.closest?.(interactiveControlSelector) || null;
+        }
+        return interactiveRoot;
+      };
       for (const node of mutation.addedNodes || []) {
         const element = node instanceof HTMLElement ? node : null;
         if (!element) {
-          const interactiveRoot = target?.closest?.(interactiveControlSelector);
-          if (
-            node?.nodeType === Node.TEXT_NODE
-            && interactiveRoot
-            && !isCodeyOwned(interactiveRoot)
-          ) {
-            addPendingScanRoot(interactiveRoot);
+          if (node?.nodeType !== Node.TEXT_NODE) continue;
+          const root = interactiveRootFor();
+          if (root && !isCodeyOwned(root)) {
+            addPendingScanRoot(root);
           }
           continue;
         }
@@ -1934,19 +1983,29 @@
     childList: true,
     subtree: true,
   });
+  // forceRefresh bypasses the per-session throttle and re-fetches sort keys for
+  // every sidebar row, so alt-tabbing must not trigger it on every focus.
+  let lastForcedThreadTimeRefresh = 0;
+  const forcedThreadTimeRefreshIntervalMs = 10_000;
+  const refreshThreadUpdatedTimesOnReturn = () => {
+    const now = Date.now();
+    if (now - lastForcedThreadTimeRefresh < forcedThreadTimeRefreshIntervalMs) return;
+    lastForcedThreadTimeRefresh = now;
+    refreshThreadUpdatedTimes(true);
+  };
   if (typeof document.addEventListener === "function") {
     document.addEventListener("visibilitychange", wakeSessionWatcher);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "hidden") refreshThreadUpdatedTimes(true);
+      if (document.visibilityState !== "hidden") refreshThreadUpdatedTimesOnReturn();
     });
     document.addEventListener("pointerdown", wakeSessionWatcher, { capture: true, passive: true });
     document.addEventListener("keydown", wakeSessionWatcherFromKey, true);
   }
   if (typeof window.addEventListener === "function") {
     window.addEventListener("focus", wakeSessionWatcher);
-    window.addEventListener("focus", () => refreshThreadUpdatedTimes(true));
+    window.addEventListener("focus", refreshThreadUpdatedTimesOnReturn);
     window.addEventListener("pageshow", wakeSessionWatcher);
-    window.addEventListener("pageshow", () => refreshThreadUpdatedTimes(true));
+    window.addEventListener("pageshow", refreshThreadUpdatedTimesOnReturn);
   }
   if (typeof window.setInterval === "function") {
     window.setInterval(() => {
