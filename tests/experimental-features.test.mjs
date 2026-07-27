@@ -25,9 +25,14 @@ const flags = [
   "concurrent_reasoning_summaries",
 ];
 
+const normalizeLineEndings = (source) => source.replace(/\r\n/g, "\n");
+
 async function sources() {
   return Object.fromEntries(await Promise.all(
-    Object.entries(paths).map(async ([key, path]) => [key, await readFile(path, "utf8")]),
+    Object.entries(paths).map(async ([key, path]) => [
+      key,
+      normalizeLineEndings(await readFile(path, "utf8")),
+    ]),
   ));
 }
 
