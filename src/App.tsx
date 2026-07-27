@@ -826,9 +826,9 @@ export function App({ embedded = false, onClose }: AppProps) {
             onRestart={askRestartCodex}
           />
 
-          {/* 中间区域：分左右两栏 (左侧: 上方应用更新, 下方飞书通知; 右侧: 功能策略) */}
+          {/* 中间区域：分左右两栏 (左侧: 应用更新与试验性功能; 右侧: 飞书通知与功能策略) */}
           <div className="upper-dashboard-grid">
-            {/* 左侧栏：上方应用更新，下方飞书通知 */}
+            {/* 左侧栏：上方应用更新，下方试验性功能 */}
             <div className="dashboard-column upper-left-column">
               <AppUpdateCard
                 status={status}
@@ -842,15 +842,6 @@ export function App({ embedded = false, onClose }: AppProps) {
                 onInstallUpdate={askInstallDownloadedUpdate}
               />
 
-              <WebhookCard
-                config={config}
-                busy={busy}
-                isBusy={isBusy}
-                webhookResult={webhookResult}
-                onWebhookChange={updateWebhook}
-                onTestWebhook={() => void testWebhook()}
-              />
-
               <ExperimentalFeaturesCard
                 config={config}
                 busy={busy}
@@ -860,8 +851,17 @@ export function App({ embedded = false, onClose }: AppProps) {
               />
             </div>
 
-            {/* 右侧栏：Codey 功能策略 */}
+            {/* 右侧栏：上方飞书通知，下方 Codey 功能策略 */}
             <div className="dashboard-column upper-right-column">
+              <WebhookCard
+                config={config}
+                busy={busy}
+                isBusy={isBusy}
+                webhookResult={webhookResult}
+                onWebhookChange={updateWebhook}
+                onTestWebhook={() => void testWebhook()}
+              />
+
               <FeaturePolicyCard
                 config={config}
                 status={status}
