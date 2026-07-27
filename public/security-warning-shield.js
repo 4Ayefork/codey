@@ -150,11 +150,18 @@
       if (!enabled) return;
       let added = false;
       for (const mutation of mutations) {
-        for (const node of mutation.addedNodes || []) {
-          if (!(node instanceof Element)) continue;
-          added = true;
-          addPendingRoot(node);
+        if (!(mutation.addedNodes?.length > 0)) continue;
+        added = true;
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element) addPendingRoot(node);
         }
+        // The warning label often arrives as a text node inside an existing
+        // button, and an inserted element may sit below the button rather than
+        // contain it, so the mutation target has to be scanned as well.
+        const target = mutation.target instanceof Element
+          ? mutation.target
+          : mutation.target?.parentElement;
+        if (target) addPendingRoot(target.closest?.("button, [role=button]") || target);
       }
       if (added) scheduleScan();
     });

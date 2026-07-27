@@ -90,6 +90,9 @@ struct ParsedRolloutEvents {
 #[derive(Debug, Clone, Default)]
 struct RolloutParseState {
     consumed_bytes: u64,
+    /// Leading bytes of the file. Provider normalisation rewrites the
+    /// `session_meta` header in place, which leaves the tail untouched.
+    head_fingerprint: Vec<u8>,
     /// Trailing bytes of the region already consumed. Re-reading just these
     /// detects an in-place rewrite (Codey itself rewrites rollouts when
     /// deleting turns or normalising providers), which must force a full
@@ -144,8 +147,12 @@ impl RolloutParseState {
         if consumed == 0 {
             return;
         }
-        self.consumed_bytes += consumed as u64;
         let taken = &chunk.as_bytes()[..consumed];
+        if self.consumed_bytes == 0 {
+            let head_len = taken.len().min(ROLLOUT_TAIL_FINGERPRINT_LEN);
+            self.head_fingerprint = taken[..head_len].to_vec();
+        }
+        self.consumed_bytes += consumed as u64;
         if taken.len() >= ROLLOUT_TAIL_FINGERPRINT_LEN {
             self.tail_fingerprint = taken[taken.len() - ROLLOUT_TAIL_FINGERPRINT_LEN..].to_vec();
         } else {
@@ -549,9 +556,20 @@ fn read_rollout_update(
     let Ok(mut file) = fs::File::open(path) else {
         return full();
     };
+    // The caller only reaches this path because the file changed. Without new
+    // bytes the change must have been an in-place rewrite, which invalidates
+    // the accumulated state even though the tail may look untouched.
     match file.metadata() {
-        Ok(metadata) if metadata.len() >= state.consumed_bytes => {}
+        Ok(metadata) if metadata.len() > state.consumed_bytes => {}
         _ => return full(),
+    }
+    // Rollout rewrites (provider normalisation) edit the `session_meta` header
+    // and leave the tail byte-identical, so the head has to be checked too.
+    if !state.head_fingerprint.is_empty() {
+        let mut head = vec![0u8; state.head_fingerprint.len()];
+        if file.read_exact(&mut head).is_err() || head != state.head_fingerprint {
+            return full();
+        }
     }
     if file
         .seek(SeekFrom::Start(state.consumed_bytes - fingerprint_len))
@@ -955,6 +973,47 @@ mod tests {
         assert_eq!(
             updated.session_statuses.get("thread-1"),
             Some(&SessionLifecycleStatus::Idle)
+        );
+    }
+
+    #[test]
+    fn header_rewrites_with_an_identical_tail_fall_back_to_a_full_parse() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("rollout-thread-1.jsonl");
+        let header = |provider: &str| {
+            format!(
+                r#"{{"type":"session_meta","payload":{{"model_provider":"{provider}","id":"thread-1"}}}}"#
+            )
+        };
+        let body = r#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}"#;
+        fs::write(
+            &rollout_path,
+            format!("{}\n{}\n", header("aaaaa_global"), body),
+        )
+        .unwrap();
+        let rollouts = || vec![("thread-1".to_string(), rollout_path.clone())];
+        let mut cache = RecentSessionEventCache::default();
+
+        cache.refresh_rollouts(rollouts());
+
+        // Provider normalisation rewrites only the session_meta header, so the
+        // consumed tail stays byte-identical; the head check has to catch it.
+        fs::write(
+            &rollout_path,
+            format!(
+                "{}\n{}\n{}\n",
+                header("codey_global"),
+                body,
+                r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#
+            ),
+        )
+        .unwrap();
+
+        cache.refresh_rollouts(rollouts());
+
+        assert_eq!(
+            cache.incremental_parse_count, 0,
+            "a rewritten header must not be resumed from the stale offset"
         );
     }
 

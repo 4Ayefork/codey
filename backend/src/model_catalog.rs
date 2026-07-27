@@ -235,8 +235,9 @@ pub fn is_available(home: &Path) -> bool {
 
 /// Signature of the catalog source files, used to reuse a parse across the
 /// back-to-back `refresh_for_provider` + `selection_state` calls on every
-/// launch and across repeated config-page lookups.
-type CatalogSignature = Vec<(u64, Option<std::time::SystemTime>)>;
+/// launch and across repeated config-page lookups. The paths are part of the
+/// key so entries can never leak between Codex homes.
+type CatalogSignature = Vec<(PathBuf, u64, Option<std::time::SystemTime>)>;
 
 static OFFICIAL_ENTRIES_CACHE: std::sync::OnceLock<
     std::sync::Mutex<Option<(CatalogSignature, Vec<Value>)>>,
@@ -246,8 +247,8 @@ fn catalog_signature(paths: &[PathBuf]) -> CatalogSignature {
     paths
         .iter()
         .map(|path| match fs::metadata(path) {
-            Ok(metadata) => (metadata.len(), metadata.modified().ok()),
-            Err(_) => (0, None),
+            Ok(metadata) => (path.clone(), metadata.len(), metadata.modified().ok()),
+            Err(_) => (path.clone(), 0, None),
         })
         .collect()
 }

@@ -55,6 +55,15 @@ class FakeElement {
     return matches;
   }
 
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (node.matches(selector)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
   }
@@ -64,6 +73,7 @@ function createRuntime(config) {
   const html = new FakeElement("html");
   const body = html.appendChild(new FakeElement("body"));
   const listeners = new Map();
+  let mutationCallback = null;
   const document = {
     body,
     documentElement: html,
@@ -82,11 +92,22 @@ function createRuntime(config) {
     document,
     Element: FakeElement,
     MutationObserver: class {
+      constructor(callback) {
+        mutationCallback = callback;
+      }
+
       observe() {}
     },
     window,
   });
-  return { body, listeners, window };
+  return {
+    body,
+    listeners,
+    get mutationCallback() {
+      return mutationCallback;
+    },
+    window,
+  };
 }
 
 function appendEnglishWarning(body) {
@@ -153,6 +174,28 @@ test("enabled shield dismisses the persistent full-access warning", async () => 
   assert.equal(button.clicks, 1);
   assert.equal(warning.style.display, "none:important");
   assert.equal(runtime.window.__codeySecurityWarningShield.dismissWarnings(), 0);
+});
+
+test("a warning label that renders after insertion is still dismissed", async () => {
+  const runtime = createRuntime({ hideFullAccessWarning: true });
+  const warning = runtime.body.appendChild(new FakeElement(
+    "section",
+    "Full access is on ChatGPT can run commands without your permission. Prompt injection.",
+  ));
+  // The button exists before its label does, which is what React does when the
+  // action text streams in a tick later.
+  const button = warning.appendChild(new FakeElement("button", ""));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(button.clicks, 0);
+
+  button.textContent = "Hide from this session";
+  const label = new FakeElement("span", "Hide from this session");
+  // A text-only or child insertion inside the existing button must still be
+  // scanned; only the inserted node's own subtree is not enough.
+  runtime.mutationCallback([{ addedNodes: [label], target: button, type: "childList" }]);
+
+  assert.equal(button.clicks, 1);
+  assert.equal(warning.style.display, "none:important");
 });
 
 test("unrelated session controls are never clicked", async () => {

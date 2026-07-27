@@ -204,39 +204,49 @@ test("streaming mutation batches coalesce into a single deferred sweep", () => {
   assert.equal(runtime.pendingTimerCount, 0);
 });
 
-test("pet control verdicts are cached until an observed attribute changes", () => {
+test("pet control verdicts are re-evaluated when React repurposes the element", () => {
   const runtime = loadShield(true);
   // Plain label so the cheap text heuristic cannot short-circuit the fiber walk.
   const control = new FakeElement("打开设置");
-  let fiberReads = 0;
-  let fiberProps = { children: { props: { id: "codex.command.openPetOverlay" } } };
+  let fiberProps = { children: { props: { id: "codex.command.somethingElse" } } };
   Object.defineProperty(control, "__reactProps$test", {
     configurable: true,
     enumerable: true,
     get() {
-      fiberReads += 1;
       return fiberProps;
+    },
+  });
+  // React attaches a fiber key alongside the props key; the verdict reads both.
+  Object.defineProperty(control, "__reactFiber$test", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return { memoizedProps: fiberProps };
     },
   });
 
   const evaluate = () => runtime.window.__codeyPetControlShield.isPetControl(control);
-  assert.equal(evaluate(), true);
-  assert.equal(fiberReads, 1);
-  evaluate();
-  evaluate();
-  assert.equal(fiberReads, 1, "repeat verdicts must not re-walk the React fiber");
+  assert.equal(evaluate(), false);
 
-  fiberProps = {};
-  assert.equal(evaluate(), true, "a stale cached verdict is expected until invalidation");
+  // A stale verdict here would leave a live pet entry point reachable, so this
+  // shield must never cache across a React update.
+  fiberProps = { children: { props: { id: "codex.command.openPetOverlay" } } };
+  assert.equal(evaluate(), true, "a repurposed control must produce a fresh verdict");
 
-  runtime.mutationCallback([{
-    attributeName: "aria-label",
-    target: control,
-    type: "attributes",
-  }]);
-  runtime.runPendingTimers();
+  fiberProps = { children: { props: { id: "codex.command.somethingElse" } } };
+  assert.equal(evaluate(), false, "verdicts must also drop back when React swaps props again");
+});
 
-  assert.equal(evaluate(), false, "an observed attribute change must invalidate the cached verdict");
+test("pet control text changes are picked up without a React update", () => {
+  const runtime = loadShield(true);
+  const control = new FakeElement("打开设置");
+
+  assert.equal(runtime.window.__codeyPetControlShield.isPetControl(control), false);
+
+  // The label heuristic must stay uncached: textContent changes with no React
+  // prop update at all.
+  control.textContent = "唤醒宠物";
+  assert.equal(runtime.window.__codeyPetControlShield.isPetControl(control), true);
 });
 
 test("pet shield cleanup disconnects the insertion observer", () => {

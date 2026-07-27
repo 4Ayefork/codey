@@ -185,24 +185,10 @@
         }
       });
 
-  // The fiber walk above dominates this shield's cost and runs on every click,
-  // keystroke and scan flush. Verdicts are stable for a given element, so they
-  // are memoised; the label heuristics stay outside the cache because they are
-  // already cheap.
-  const voiceControlVerdicts = typeof WeakMap === "function" ? new WeakMap() : null;
-  const cachedReactVerdict = (control, cacheKey, predicate) => {
-    if (!voiceControlVerdicts) return hasMatchingReactValue(control, predicate);
-    let verdicts = voiceControlVerdicts.get(control);
-    if (verdicts && cacheKey in verdicts) return verdicts[cacheKey];
-    const verdict = hasMatchingReactValue(control, predicate);
-    if (!verdicts) {
-      verdicts = {};
-      voiceControlVerdicts.set(control, verdicts);
-    }
-    verdicts[cacheKey] = verdict;
-    return verdict;
-  };
-
+  // Verdicts are deliberately not memoised. `restoreRepurposedVoiceControls`
+  // depends on seeing a control stop being a voice control, and the walk above
+  // reads every __reactProps$/__reactFiber$ key plus eight ancestor fibers, so
+  // no cheap identity token covers what the verdict actually depends on.
   const isVoiceControl = (control) => {
     if (!(control instanceof HTMLElement)) return false;
     const descriptor = [
@@ -213,14 +199,13 @@
     if (preservedComposerActionPattern.test(descriptor)) return false;
     if (fallbackLabelPattern.test(descriptor)) return true;
 
-    return cachedReactVerdict(control, "voice", isVoiceControlId);
+    return hasMatchingReactValue(control, isVoiceControlId);
   };
 
   const isGptVoicePromotionControl = (control) =>
     control instanceof HTMLElement
-      && cachedReactVerdict(
+      && hasMatchingReactValue(
         control,
-        "promotion",
         (value) => gptVoicePromotionIdPrefixes.some((prefix) => value.startsWith(prefix)),
       );
 

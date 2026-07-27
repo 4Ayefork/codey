@@ -28,7 +28,8 @@
     return false;
   };
 
-  const evaluatePetControl = (control) => {
+  const isPetControl = (control) => {
+    if (!(control instanceof HTMLElement)) return false;
     const descriptor = [
       control.getAttribute("aria-label"),
       control.getAttribute("title"),
@@ -36,6 +37,12 @@
     ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     if (fallbackLabelPattern.test(descriptor)) return true;
 
+    // Deliberately not memoised. React reuses host elements and swaps both
+    // __reactProps$ and __reactFiber$ independently, and the walk below reads
+    // every matching key, so no cheap identity token covers the whole verdict.
+    // At ~3 µs per control the walk is not worth a fail-open cache on a shield
+    // that has to fail closed; the observer throttling above is what keeps this
+    // off the streaming hot path.
     return Object.keys(control)
       .filter((key) => reactInternalKeyPattern.test(key))
       .some((key) => {
@@ -46,21 +53,6 @@
           return false;
         }
       });
-  };
-
-  // The React fiber walk below is the expensive part of this shield, so the
-  // verdict is memoised per element. Entries are dropped when one of the
-  // observed attributes changes, which is the only way a verdict can flip.
-  const petControlVerdicts = typeof WeakMap === "function" ? new WeakMap() : null;
-
-  const isPetControl = (control) => {
-    if (!(control instanceof HTMLElement)) return false;
-    if (!petControlVerdicts) return evaluatePetControl(control);
-    const cached = petControlVerdicts.get(control);
-    if (cached !== undefined) return cached;
-    const verdict = evaluatePetControl(control);
-    petControlVerdicts.set(control, verdict);
-    return verdict;
   };
 
   const controlsWithin = (root, selector) => {
@@ -162,9 +154,6 @@
       for (const mutation of mutations) {
         const target = mutationRoot(mutation.target);
         if (mutation.type === "attributes") {
-          // aria-label / role / title drive the label heuristic, so the cached
-          // verdict for this element is no longer trustworthy.
-          if (target) petControlVerdicts?.delete(target);
           const containingControl = target?.closest?.(controlSelector);
           if (containingControl) addPendingRoot(containingControl);
           continue;
