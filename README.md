@@ -86,6 +86,7 @@ Codey 已将实际使用的 `Codey v0.4.3` core/data crate 固定在 `vendor/Cod
 - Windows 卡顿补丁不设开关：Codey 在运行时识别 Windows，并在每次启动 Codex 时自动隔离 Micro 设备模块和周期性 WMI 进程采样。首次应用或版本升级后应先从系统托盘完全退出已有 Codex，确保补丁能在新主进程执行前安装。macOS 不执行 Windows 专属分支。
 - 宠物硬阉割：`slimCodexPet` 默认为 `true`，macOS / Windows 都会在下次通过 Codey 启动 Codex 时生效。启用时若主 bundle 的语义锚点因官方升级而变化，补丁会失败关闭并停止 Codex，不会降级成仅隐藏 UI；关闭后下次启动会恢复完整宠物功能。
 - 语音精简：`slimCodexVoice` 默认为 `false`，macOS / Windows 都会在下次通过 Codey 启动 Codex 时生效。开启后同时覆盖旧听写和新版 GPT Voice / Realtime Voice；关闭时保留完整语音功能。
+- Codex 慢启动保护：`fastCodexStartup` 默认为 `true`。Codey 会在 Electron 主进程仍处于启动暂停阶段时，为登录后的 Statsig bootstrap 设置 1.5 秒上限，并保留 renderer 保护作为兼容兜底；正常响应保持原流程，慢请求或失败请求会让 Codex 使用自身错误降级路径继续挂载主界面。原始初始化仍可在后续刷新中恢复；关闭后下次启动完全使用 Codex 原生等待策略。
 - FastCtx 上下文工具：`fastContextTools` 默认为 `false`。打开后下次启动 Codex 生效；Codey 仅在本次运行的临时 `config.toml` 中注册独立的 `codey_fastctx` MCP、设置 8500 token 输出预算并追加工具使用指引，退出时随 provider 配置一起恢复原文件。用户已有的 `mcp_servers.fastctx` 不会被覆盖。
 - 子代理协作优化：`subagentOptimization` 默认为 `false`。开启前会校验当前线路是否支持子代理固定使用的 `gpt-5.6-luna`；第三方线路会实时刷新上游模型列表，不支持或无法确认时保持关闭并提示。打开后下次启动 Codex 生效；`config.toml`、`AGENTS.md` 与 `agents/default.toml` 的变更纳入同一个运行时租约，退出时自动恢复。`config.toml` 使用三方合并回滚 Codey 拥有的字段，提示词只移除 Codey 注入的完整块，用户运行期间替换过的 `default.toml` 不会被覆盖。
 - Codex App 路径：可在 Codey 配置界面填写；留空时使用 Codey 的平台发现逻辑。

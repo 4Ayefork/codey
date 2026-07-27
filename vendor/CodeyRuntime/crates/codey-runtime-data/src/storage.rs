@@ -1515,7 +1515,14 @@ fn update_rollout_session_meta_cwd(
 
 fn codex_thread_timestamp_columns(db: &Connection) -> anyhow::Result<Vec<String>> {
     let existing: HashSet<String> = table_columns(db, "threads")?.into_iter().collect();
-    Ok(["updated_at", "updated_at_ms", "created_at_ms"]
+    Ok([
+        "updated_at",
+        "updated_at_ms",
+        "created_at",
+        "created_at_ms",
+        "recency_at",
+        "recency_at_ms",
+    ]
         .iter()
         .filter(|column| existing.contains(**column))
         .map(|column| column.to_string())
@@ -1550,7 +1557,14 @@ fn fetch_thread_timestamp_payload(
 }
 
 fn add_timestamp_payload(payload: &mut Map<String, Value>, row: &Map<String, Value>) {
-    for column in ["updated_at", "updated_at_ms", "created_at_ms"] {
+    for column in [
+        "updated_at",
+        "updated_at_ms",
+        "created_at",
+        "created_at_ms",
+        "recency_at",
+        "recency_at_ms",
+    ] {
         payload.insert(
             column.to_string(),
             row.get(column).cloned().unwrap_or(Value::Null),

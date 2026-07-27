@@ -61,15 +61,28 @@ pub fn thread_sort_keys(home: &Path, sessions: &[SessionRef]) -> Value {
 
 fn timestamp_ms(payload: &Value) -> i64 {
     payload
-        .get("updated_at_ms")
+        .get("recency_at_ms")
         .and_then(json_i64)
+        .or_else(|| {
+            payload
+                .get("recency_at")
+                .and_then(json_i64)
+                .map(|seconds| seconds.saturating_mul(1_000))
+        })
+        .or_else(|| payload.get("created_at_ms").and_then(json_i64))
+        .or_else(|| {
+            payload
+                .get("created_at")
+                .and_then(json_i64)
+                .map(|seconds| seconds.saturating_mul(1_000))
+        })
+        .or_else(|| payload.get("updated_at_ms").and_then(json_i64))
         .or_else(|| {
             payload
                 .get("updated_at")
                 .and_then(json_i64)
                 .map(|seconds| seconds.saturating_mul(1_000))
         })
-        .or_else(|| payload.get("created_at_ms").and_then(json_i64))
         .unwrap_or_default()
 }
 
@@ -238,16 +251,41 @@ mod tests {
                         "session_id": "thread-1",
                         "updated_at": 10_800,
                         "updated_at_ms": null,
-                        "created_at_ms": null
+                        "created_at": null,
+                        "created_at_ms": null,
+                        "recency_at": null,
+                        "recency_at_ms": null
                     },
                     {
                         "session_id": "thread-2",
                         "updated_at": null,
                         "updated_at_ms": 7_200_000,
-                        "created_at_ms": null
+                        "created_at": null,
+                        "created_at_ms": null,
+                        "recency_at": null,
+                        "recency_at_ms": null
                     }
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn timestamp_selection_ignores_open_refreshed_updated_at_when_stable_fields_exist() {
+        assert_eq!(
+            timestamp_ms(&json!({
+                "recency_at_ms": 3_600_000,
+                "created_at_ms": 3_000_000,
+                "updated_at_ms": 99_999_000
+            })),
+            3_600_000
+        );
+        assert_eq!(
+            timestamp_ms(&json!({
+                "created_at_ms": 3_000_000,
+                "updated_at_ms": 99_999_000
+            })),
+            3_000_000
         );
     }
 

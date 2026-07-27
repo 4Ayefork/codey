@@ -115,6 +115,7 @@ impl CodeyRuntime {
     ) -> Result<(Self, oneshot::Receiver<()>)> {
         let home = codex_home();
         let injection_scripts = cdp::prepare_injection_scripts(
+            config.fast_codex_startup,
             config.slim_codex_pet,
             config.slim_codex_voice,
             config.hide_full_access_warning,
@@ -283,6 +284,7 @@ impl CodeyRuntime {
             debug_port,
             config.slim_codex_pet,
             config.slim_codex_voice,
+            config.fast_codex_startup,
             config.gpu_launch_mode,
         )
         .await
@@ -701,11 +703,13 @@ async fn spawn_codex(
     debug_port: u16,
     disable_codex_pet: bool,
     disable_codex_voice: bool,
+    fast_codex_startup: bool,
     gpu_launch_mode: GpuLaunchMode,
 ) -> Result<SpawnedCodex> {
     let patch_options = crate::codex_startup_patch::PatchOptions {
         disable_pet: disable_codex_pet,
         disable_voice: disable_codex_voice,
+        fast_codex_startup,
     };
     let gpu_arguments = gpu_launch_arguments(gpu_launch_mode, !cfg!(target_os = "macos"));
 

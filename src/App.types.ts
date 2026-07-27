@@ -24,6 +24,7 @@ export type Config = {
   slimCodexVoice: boolean;
   gpuLaunchMode: "off" | "disableGpu" | "disableGpuRasterization";
   fastContextTools: boolean;
+  fastCodexStartup: boolean;
   subagentOptimization: boolean;
   hideFullAccessWarning: boolean;
 };

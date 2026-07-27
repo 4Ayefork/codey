@@ -27,7 +27,8 @@ async function loadVoicePatchExpression() {
   assert.ok(template);
   return template
     .replaceAll("__DISABLE_PET__", "false")
-    .replaceAll("__DISABLE_VOICE__", "true");
+    .replaceAll("__DISABLE_VOICE__", "true")
+    .replaceAll("__FAST_CODEX_STARTUP__", "true");
 }
 
 test("voice startup patch blocks native listeners and Dictation windows", async () => {
@@ -57,7 +58,7 @@ test("voice startup patch blocks native listeners and Dictation windows", async 
   };
 
   try {
-    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v11");
+    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v13");
 
     const childProcess = Module._load("node:child_process", undefined, false);
     const bareMonitor = childProcess.spawn(

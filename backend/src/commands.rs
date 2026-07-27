@@ -964,6 +964,7 @@ pub async fn save_codey_config(
     config.slim_codex_voice = config_input.slim_codex_voice;
     config.gpu_launch_mode = config_input.gpu_launch_mode;
     config.fast_context_tools = config_input.fast_context_tools;
+    config.fast_codex_startup = config_input.fast_codex_startup;
     config.subagent_optimization = config_input.subagent_optimization;
     config.hide_full_access_warning = config_input.hide_full_access_warning;
     let config = config.normalize();
@@ -1386,6 +1387,7 @@ fn config_requires_restart(applied: &CodeyConfig, current: &CodeyConfig) -> bool
         || applied.slim_codex_voice != current.slim_codex_voice
         || applied.gpu_launch_mode != current.gpu_launch_mode
         || applied.fast_context_tools != current.fast_context_tools
+        || applied.fast_codex_startup != current.fast_codex_startup
         || applied.subagent_optimization != current.subagent_optimization
         || applied.selected_models() != current.selected_models()
         || applied.upstream_models() != current.upstream_models()
@@ -1644,6 +1646,10 @@ mod restart_tests {
         let mut gpu_mode_change = applied.clone();
         gpu_mode_change.gpu_launch_mode = crate::config::GpuLaunchMode::DisableGpuRasterization;
         assert!(config_requires_restart(&applied, &gpu_mode_change));
+
+        let mut fast_startup_change = applied.clone();
+        fast_startup_change.fast_codex_startup = !fast_startup_change.fast_codex_startup;
+        assert!(config_requires_restart(&applied, &fast_startup_change));
     }
 
     #[test]

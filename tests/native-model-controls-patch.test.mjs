@@ -15,7 +15,8 @@ async function loadPatchExpression() {
   assert.ok(template, "startup patch template should be readable");
   return template
     .replaceAll("__DISABLE_PET__", "false")
-    .replaceAll("__DISABLE_VOICE__", "false");
+    .replaceAll("__DISABLE_VOICE__", "false")
+    .replaceAll("__FAST_CODEX_STARTUP__", "true");
 }
 
 test("API and ChatGPT auth share model-aware native service-tier controls", async () => {
@@ -44,7 +45,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
   try {
     assert.equal(
       (0, eval)(await loadPatchExpression()),
-      "codey-startup-patch-installed-v11",
+      "codey-startup-patch-installed-v13",
     );
     Module._load("electron", undefined, false).protocol.handle(
       "app",

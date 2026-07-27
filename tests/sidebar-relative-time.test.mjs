@@ -118,21 +118,27 @@ test("formats compact relative times for the sidebar", () => {
   const format = window.__codeyFormatRelativeThreadTime;
 
   assert.equal(format(now - 59_000, now), "刚刚");
-  assert.equal(format(now - 3 * 60_000, now), "3m");
-  assert.equal(format(now - 3 * 60 * 60_000, now), "3h");
-  assert.equal(format(now - 2 * 24 * 60 * 60_000, now), "2d");
-  assert.equal(format(now - 45 * 24 * 60 * 60_000, now), "1mo");
-  assert.equal(format(now - 360 * 24 * 60 * 60_000, now), "12mo");
-  assert.equal(format(now - 400 * 24 * 60 * 60_000, now), "1y");
+  assert.equal(format(now - 3 * 60_000, now), "3 分");
+  assert.equal(format(now - 3 * 60 * 60_000, now), "3 小时");
+  assert.equal(format(now - 2 * 24 * 60 * 60_000, now), "2 天");
+  assert.equal(format(now - 14 * 24 * 60 * 60_000, now), "2 周");
+  assert.equal(format(now - 45 * 24 * 60 * 60_000, now), "1 月");
+  assert.equal(format(now - 360 * 24 * 60 * 60_000, now), "12 月");
+  assert.equal(format(now - 400 * 24 * 60 * 60_000, now), "1 年");
 });
 
 test("normalizes Codex timestamp payload variants to milliseconds", () => {
   const { window } = loadInjection();
   const timestampFrom = window.__codeyThreadTimestampMsFromPayload;
 
-  assert.equal(timestampFrom({ updated_at_ms: 123_456 }), 123_456);
-  assert.equal(timestampFrom({ updated_at: 123 }), 123_000);
+  assert.equal(timestampFrom({ recency_at_ms: 222_333, updated_at_ms: 123_456 }), 222_333);
+  assert.equal(timestampFrom({ recency_at: 123, updated_at_ms: 456_789 }), 123_000);
   assert.equal(timestampFrom({ createdAtMs: 456_789 }), 456_789);
+  assert.equal(
+    timestampFrom({ session_id: "019f948c-dba4-73c0-83e3-804e6ad6a5be", updated_at_ms: 999_999 }),
+    1_784_903_687_076,
+  );
+  assert.equal(timestampFrom({ updated_at: 123 }), 123_000);
 });
 
 test("renders an accessible time element in the thread row content", () => {
@@ -147,10 +153,10 @@ test("renders an accessible time element in the thread row content", () => {
 
   const label = content.querySelector("[data-codey-thread-updated-at]");
   assert.ok(label);
-  assert.equal(label.textContent, "2d");
+  assert.equal(label.textContent, "2 天");
   assert.equal(label.getAttribute("data-codey-thread-updated-at-ms"), String(timestamp));
   assert.match(label.getAttribute("datetime"), /^\d{4}-\d{2}-\d{2}T/);
-  assert.match(label.getAttribute("aria-label"), /^最后消息：2d/);
+  assert.match(label.getAttribute("aria-label"), /^最后消息：2 天/);
   assert.match(label.title, /^最后消息：/);
 
   const attributeWrites = label.attributeWrites;
@@ -178,7 +184,7 @@ test("batches visible thread timestamps through the bridge and renders the resul
       calls.push({ path, payload });
       return {
         status: "ok",
-        sort_keys: [{ session_id: "thread-1", updated_at_ms: timestamp }],
+        sort_keys: [{ session_id: "thread-1", recency_at_ms: timestamp, updated_at_ms: Date.now() }],
       };
     },
   });
@@ -191,7 +197,7 @@ test("batches visible thread timestamps through the bridge and renders the resul
   });
   assert.equal(
     content.querySelector("[data-codey-thread-updated-at]")?.textContent,
-    "3h",
+    "3 小时",
   );
   assert.equal(document.threadRowQueries, 1);
 });

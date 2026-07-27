@@ -15,7 +15,8 @@ async function loadPatchExpression() {
   assert.ok(template, "startup patch template should be readable by the regression test");
   return template
     .replaceAll("__DISABLE_PET__", "false")
-    .replaceAll("__DISABLE_VOICE__", "false");
+    .replaceAll("__DISABLE_VOICE__", "false")
+    .replaceAll("__FAST_CODEX_STARTUP__", "true");
 }
 
 test("startup patch disables Codex analytics and trims diagnostic polling", async () => {
@@ -34,7 +35,7 @@ test("startup patch disables Codex analytics and trims diagnostic polling", asyn
 
   try {
     const expression = await loadPatchExpression();
-    assert.equal((0, eval)(expression), "codey-startup-patch-installed-v11");
+    assert.equal((0, eval)(expression), "codey-startup-patch-installed-v13");
 
     const directArgs = [
       "-c",

@@ -1002,7 +1002,16 @@ fn archived_lookup_workspace_move_and_sort_keys_match_expected_shape() {
 
     assert_eq!(
         adapter.codex_thread_sort_key(&session("local:t1", "Codex Thread")),
-        json!({"status": "ok", "session_id": "t1", "updated_at": 100, "updated_at_ms": 100000, "created_at_ms": null})
+        json!({
+            "status": "ok",
+            "session_id": "t1",
+            "updated_at": 100,
+            "updated_at_ms": 100000,
+            "created_at": null,
+            "created_at_ms": null,
+            "recency_at": null,
+            "recency_at_ms": null
+        })
     );
     assert_eq!(
         adapter.codex_thread_sort_keys(&[
@@ -1012,8 +1021,24 @@ fn archived_lookup_workspace_move_and_sort_keys_match_expected_shape() {
         json!({
             "status": "ok",
             "sort_keys": [
-                {"session_id": "t2", "updated_at": 200, "updated_at_ms": 200000, "created_at_ms": null},
-                {"session_id": "t1", "updated_at": 100, "updated_at_ms": 100000, "created_at_ms": null}
+                {
+                    "session_id": "t2",
+                    "updated_at": 200,
+                    "updated_at_ms": 200000,
+                    "created_at": null,
+                    "created_at_ms": null,
+                    "recency_at": null,
+                    "recency_at_ms": null
+                },
+                {
+                    "session_id": "t1",
+                    "updated_at": 100,
+                    "updated_at_ms": 100000,
+                    "created_at": null,
+                    "created_at_ms": null,
+                    "recency_at": null,
+                    "recency_at_ms": null
+                }
             ]
         })
     );

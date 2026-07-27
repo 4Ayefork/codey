@@ -817,10 +817,27 @@
     return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
   };
 
+  const threadTimestampValueToMs = (value) => {
+    const timestamp = numericThreadTimestamp(value);
+    if (!timestamp) return 0;
+    return timestamp < 1_000_000_000_000 ? timestamp * 1_000 : timestamp;
+  };
+
+  const uuidV7ThreadTimestampMs = (sessionId) => {
+    const id = normalizeThreadSessionId(sessionId).replaceAll("-", "");
+    if (!/^[0-9a-fA-F]{12}/.test(id)) return 0;
+    const timestamp = Number.parseInt(id.slice(0, 12), 16);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+  };
+
   const threadTimestampMsFromPayload = (payload) => (
-    numericThreadTimestamp(payload?.updated_at_ms ?? payload?.updatedAtMs)
-    || numericThreadTimestamp(payload?.updated_at ?? payload?.updatedAt) * 1_000
+    numericThreadTimestamp(payload?.recency_at_ms ?? payload?.recencyAtMs)
+    || threadTimestampValueToMs(payload?.recency_at ?? payload?.recencyAt)
     || numericThreadTimestamp(payload?.created_at_ms ?? payload?.createdAtMs)
+    || threadTimestampValueToMs(payload?.created_at ?? payload?.createdAt)
+    || uuidV7ThreadTimestampMs(payload?.session_id ?? payload?.sessionId)
+    || numericThreadTimestamp(payload?.updated_at_ms ?? payload?.updatedAtMs)
+    || threadTimestampValueToMs(payload?.updated_at ?? payload?.updatedAt)
   );
 
   const formatRelativeThreadTime = (timestampMs, nowMs = Date.now()) => {
@@ -829,14 +846,16 @@
     const elapsedSeconds = Math.max(0, Math.floor((nowMs - timestamp) / 1_000));
     if (elapsedSeconds < 60) return "刚刚";
     const minutes = Math.floor(elapsedSeconds / 60);
-    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 60) return `${minutes} 分`;
     const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h`;
+    if (hours < 24) return `${hours} 小时`;
     const days = Math.floor(hours / 24);
-    if (days < 30) return `${days}d`;
+    if (days < 7) return `${days} 天`;
+    const weeks = Math.floor(days / 7);
+    if (weeks < 5) return `${weeks} 周`;
     const months = Math.floor(days / 30);
-    if (days < 365) return `${months}mo`;
-    return `${Math.floor(days / 365)}y`;
+    if (days < 365) return `${Math.max(1, months)} 月`;
+    return `${Math.max(1, Math.floor(days / 365))} 年`;
   };
 
   const threadUpdatedAtMount = (row) => {

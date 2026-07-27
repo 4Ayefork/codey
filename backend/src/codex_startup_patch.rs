@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v11";
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v13";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
     pub disable_pet: bool,
     pub disable_voice: bool,
+    pub fast_codex_startup: bool,
 }
 
 pub fn inspector_argument(port: u16) -> String {
@@ -18,6 +19,8 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
 (() => {
   const disablePet = __DISABLE_PET__;
   const disableVoice = __DISABLE_VOICE__;
+  const fastCodexStartup = __FAST_CODEX_STARTUP__;
+  const statsigBootstrapTimeoutMs = 1500;
   const disableWindowsOptimizations = process.platform === "win32";
   const disableMicro = disableWindowsOptimizations;
   const disableWindowsWmiSampler = disableWindowsOptimizations;
@@ -138,6 +141,49 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         /selectedServiceTierIconKind\s*:\s*[$A-Z_a-z][$\w]*\s*\?\s*null\s*:\s*[$A-Z_a-z][$\w]*\s*,\s*stripGptPrefix\s*:/g,
         "selectedServiceTierIconKind:null,stripGptPrefix:",
         "model list fast icons",
+      );
+    }
+    if (
+      fastCodexStartup &&
+      source.includes(
+        "CODEX_POST_LOGIN_STATSIG_BOOTSTRAP_FAILURE_TYPE_CLIENT_INITIALIZATION_FAILED",
+      ) &&
+      source.includes("Statsig: error while bootstrapping post-login client") &&
+      source.includes("CodexStatsigProvider.sync")
+    ) {
+      // Keep the bootstrap call outside the inner StatsigClient block. Minified
+      // bundles often reuse the bootstrap argument name for the client binding;
+      // moving both into one block would put the argument in that binding's TDZ.
+      // A timeout still rejects the mutation and enters the provider fallback.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /let\s+([$A-Z_a-z][$\w]*)\s*=\s*await\s+([$A-Z_a-z][$\w]*)\(\s*([$A-Z_a-z][$\w]*)\s*\)\s*;\s*try\s*\{\s*let\s+([$A-Z_a-z][$\w]*)\s*=\s*new\s+([$A-Z_a-z][$\w]*)\.StatsigClient\s*\(/g,
+        (
+          _match,
+          payloadName,
+          bootstrapName,
+          bootstrapInputName,
+          clientName,
+          statsigModuleName,
+        ) =>
+          `let ${payloadName}=await Promise.race([${bootstrapName}(${bootstrapInputName}),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig bootstrap timeout")),${statsigBootstrapTimeoutMs}))]);try{let ${clientName}=new ${statsigModuleName}.StatsigClient(`,
+        "post-login Statsig bootstrap timeout",
+      );
+    }
+    if (
+      fastCodexStartup &&
+      source.includes("useStatsigInternalClientFactoryAsync") &&
+      source.includes("_getInstance") &&
+      source.includes("loadingStatus")
+    ) {
+      // The SDK's anonymous-client hook otherwise keeps the entire route tree
+      // behind its loading placeholder until initializeAsync settles.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /([$A-Z_a-z][$\w]*)\.loadingStatus\s*!==\s*`Ready`\s*&&\s*\1\.initializeAsync\(\)\.catch\s*\(/g,
+        (_match, clientName) =>
+          `${clientName}.loadingStatus!==\`Ready\`&&Promise.race([${clientName}.initializeAsync(),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig async initialization timeout")),${statsigBootstrapTimeoutMs}))]).catch(`,
+        "Statsig async client initialization timeout",
       );
     }
     return patched;
@@ -1224,6 +1270,8 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
     disableMicro,
     disablePet,
     disableVoice,
+    fastCodexStartup,
+    statsigBootstrapTimeoutMs,
     disableAppServerAnalytics: true,
     get disableDesktopCesAnalytics() {
       return !hasOptionalMainBundlePatchFailure("desktopCesAnalytics");
@@ -1253,7 +1301,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v11";
+  return "codey-startup-patch-installed-v13";
 })()
 "#;
 
@@ -1266,6 +1314,14 @@ fn patch_expression(options: PatchOptions) -> String {
         .replace(
             "__DISABLE_VOICE__",
             if options.disable_voice {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .replace(
+            "__FAST_CODEX_STARTUP__",
+            if options.fast_codex_startup {
                 "true"
             } else {
                 "false"
@@ -1468,7 +1524,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v11");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v13");
     }
 
     #[test]
@@ -1476,6 +1532,7 @@ mod tests {
         let expression = patch_expression(PatchOptions {
             disable_pet: true,
             disable_voice: false,
+            fast_codex_startup: true,
         });
 
         assert!(expression.contains("const disablePet = true"));
@@ -1499,6 +1556,9 @@ mod tests {
         assert!(expression.contains("get disableAppStateHeartbeat()"));
         assert!(expression.contains("get optionalMainBundlePatchFailures()"));
         assert!(expression.contains("module._compile(source, filename)"));
+        assert!(expression.contains("const fastCodexStartup = true"));
+        assert!(expression.contains("Codey Statsig bootstrap timeout"));
+        assert!(expression.contains("statsigBootstrapTimeoutMs = 1500"));
     }
 
     #[test]
@@ -1506,6 +1566,7 @@ mod tests {
         let expression = patch_expression(PatchOptions {
             disable_pet: false,
             disable_voice: false,
+            fast_codex_startup: true,
         });
 
         assert!(expression.contains("process.platform === \"win32\""));
@@ -1516,10 +1577,23 @@ mod tests {
     }
 
     #[test]
+    fn fast_startup_bootstrap_cap_can_be_disabled() {
+        let expression = patch_expression(PatchOptions {
+            disable_pet: false,
+            disable_voice: false,
+            fast_codex_startup: false,
+        });
+
+        assert!(expression.contains("const fastCodexStartup = false"));
+        assert!(!expression.contains("__FAST_CODEX_STARTUP__"));
+    }
+
+    #[test]
     fn voice_slimming_preserves_codex_initialization_services() {
         let expression = patch_expression(PatchOptions {
             disable_pet: false,
             disable_voice: true,
+            fast_codex_startup: true,
         });
 
         assert!(expression.contains("const disableVoice = true"));
@@ -1535,6 +1609,7 @@ mod tests {
         let expression = patch_expression(PatchOptions {
             disable_pet: false,
             disable_voice: false,
+            fast_codex_startup: true,
         });
 
         assert!(expression.contains("__CODEY_TEMP_WEBVIEW_LIFECYCLE__.close"));
@@ -1657,6 +1732,7 @@ mod tests {
         let expression = patch_expression(PatchOptions {
             disable_pet: true,
             disable_voice: false,
+            fast_codex_startup: true,
         });
         install_over_websocket(&format!("ws://{address}"), &expression)
             .await
@@ -1717,6 +1793,7 @@ mod tests {
         let expression = patch_expression(PatchOptions {
             disable_pet: true,
             disable_voice: false,
+            fast_codex_startup: true,
         });
         let error = tokio::time::timeout(
             std::time::Duration::from_millis(500),

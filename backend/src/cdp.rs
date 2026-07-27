@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_OVERLAY_LOAD_PATH: &str = "/internal/codey/settings-overlay/load";
 const SESSION_TOOLS_LOAD_PATH: &str = "/internal/codey/session-tools/load";
+const FAST_STARTUP_STATSIG_TIMEOUT_MS: u64 = 1500;
+const FAST_STARTUP_SHIELD_SCRIPT: &str = include_str!("../../public/fast-startup-shield.js");
 const CODEY_BRIDGE_SCRIPT: &str = include_str!("../../public/codey-bridge.js");
 const MODEL_WHITELIST_INJECT_SCRIPT: &str = include_str!("../../public/model-whitelist-inject.js");
 const RENDERER_INJECT_SCRIPT: &str = include_str!("../../public/renderer-inject.js");
@@ -78,12 +80,29 @@ impl InjectedTarget {
 }
 
 pub fn prepare_injection_scripts(
+    fast_codex_startup: bool,
     slim_codex_pet: bool,
     slim_codex_voice: bool,
     hide_full_access_warning: bool,
     user_scripts: &[String],
 ) -> PreparedInjectionScripts {
     let builtin_scripts = [
+        (
+            "fast-startup-shield",
+            "Codex 快速启动保护",
+            FAST_STARTUP_SHIELD_SCRIPT,
+            format!(
+                r#"(() => {{
+                  const shield = window.__codeyFastStartupShield;
+                  if (!shield || shield.enabled !== {fast_codex_startup}
+                    || typeof shield.snapshot !== "function") return "";
+                  const snapshot = shield.snapshot();
+                  return shield.enabled
+                    ? `慢请求保护已启用（${{snapshot.timeoutMs}}ms，已降级 ${{snapshot.statsigTimeouts}} 次）`
+                    : "慢请求保护已关闭";
+                }})()"#
+            ),
+        ),
         (
             "bridge-helpers",
             "桥接辅助",
@@ -189,7 +208,8 @@ pub fn prepare_injection_scripts(
         ),
     ];
     let mut core_bundle = String::with_capacity(
-        CODEY_BRIDGE_SCRIPT.len()
+        FAST_STARTUP_SHIELD_SCRIPT.len()
+            + CODEY_BRIDGE_SCRIPT.len()
             + MODEL_WHITELIST_INJECT_SCRIPT.len()
             + RENDERER_INJECT_SCRIPT.len()
             + PET_CONTROL_SHIELD_SCRIPT.len()
@@ -206,7 +226,7 @@ pub fn prepare_injection_scripts(
             source: "builtin",
             probe: Some(probe),
         };
-        let prepared = prepare_script(script, slim_codex_pet, slim_codex_voice);
+        let prepared = prepare_script(script, fast_codex_startup, slim_codex_pet, slim_codex_voice);
         append_guarded_script(&mut core_bundle, &descriptor, prepared.as_ref());
         descriptors.push(descriptor);
     }
@@ -235,12 +255,29 @@ pub fn prepare_injection_scripts(
     }
 }
 
-fn prepare_script(script: &str, slim_codex_pet: bool, slim_codex_voice: bool) -> Cow<'_, str> {
-    if !script.contains("__CODEY_SLIM_PET__") && !script.contains("__CODEY_SLIM_VOICE__") {
+fn prepare_script(
+    script: &str,
+    fast_codex_startup: bool,
+    slim_codex_pet: bool,
+    slim_codex_voice: bool,
+) -> Cow<'_, str> {
+    if !script.contains("__CODEY_FAST_CODEX_STARTUP__")
+        && !script.contains("__CODEY_STATSIG_TIMEOUT_MS__")
+        && !script.contains("__CODEY_SLIM_PET__")
+        && !script.contains("__CODEY_SLIM_VOICE__")
+    {
         return Cow::Borrowed(script);
     }
     Cow::Owned(
         script
+            .replace(
+                "__CODEY_FAST_CODEX_STARTUP__",
+                if fast_codex_startup { "true" } else { "false" },
+            )
+            .replace(
+                "__CODEY_STATSIG_TIMEOUT_MS__",
+                &FAST_STARTUP_STATSIG_TIMEOUT_MS.to_string(),
+            )
             .replace(
                 "__CODEY_SLIM_PET__",
                 if slim_codex_pet { "true" } else { "false" },
@@ -795,11 +832,14 @@ mod tests {
             true,
             false,
             false,
+            false,
             &["".to_string(), "window.userScriptRan = true;".to_string()],
         );
 
         assert_eq!(prepared.scripts.len(), 2);
         let core = &prepared.scripts[0];
+        assert!(core.contains("window.__codeyFastStartupShield"));
+        assert!(core.contains(r#"const enabled = "true" === "true""#));
         assert!(core.contains("window.__codeyBridgeHelpersInstalled"));
         assert!(core.contains("window.__codeyModelWhitelistPatch"));
         assert!(core.contains("/codex-model-catalog"));
@@ -817,9 +857,9 @@ mod tests {
         assert!(prepared.scripts[1].contains("window.userScriptRan = true;"));
         assert!(prepared.scripts[1].contains(r#"status = "executed""#));
         assert!(prepared.scripts[1].contains("用户脚本 1 injection failed"));
-        assert_eq!(prepared.descriptors.len(), 9);
-        assert_eq!(prepared.descriptors[8].id, "user-script-1");
-        assert_eq!(prepared.descriptors[8].source, "user");
+        assert_eq!(prepared.descriptors.len(), 10);
+        assert_eq!(prepared.descriptors[9].id, "user-script-1");
+        assert_eq!(prepared.descriptors[9].source, "user");
         let snapshot_script = injection_status_snapshot_script(&prepared.descriptors);
         assert!(snapshot_script.contains("bridge-helpers"));
         assert!(snapshot_script.contains("模型目录已加载"));
@@ -844,6 +884,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &["window.userScriptRan = true;".to_string()],
         );
         let reported = vec![
@@ -864,11 +905,13 @@ mod tests {
         let statuses = reconcile_injection_statuses(&prepared.descriptors, reported);
 
         assert_eq!(statuses.len(), prepared.descriptors.len());
-        assert_eq!(statuses[0].id, "bridge-helpers");
-        assert_eq!(statuses[0].status, "effective");
-        assert_eq!(statuses[0].detail.as_deref(), Some("桥接函数可调用"));
-        assert_eq!(statuses[1].id, "model-whitelist");
-        assert_eq!(statuses[1].status, "unknown");
+        assert_eq!(statuses[0].id, "fast-startup-shield");
+        assert_eq!(statuses[0].status, "unknown");
+        assert_eq!(statuses[1].id, "bridge-helpers");
+        assert_eq!(statuses[1].status, "effective");
+        assert_eq!(statuses[1].detail.as_deref(), Some("桥接函数可调用"));
+        assert_eq!(statuses[2].id, "model-whitelist");
+        assert_eq!(statuses[2].status, "unknown");
         assert_eq!(
             statuses.last().map(|status| status.id.as_str()),
             Some("user-script-1")

@@ -49,6 +49,7 @@ if (import.meta.env.DEV) {
       slimCodexVoice: false,
       gpuLaunchMode: "off" as const,
       fastContextTools: false,
+      fastCodexStartup: true,
       subagentOptimization: false,
       hideFullAccessWarning: false,
     };

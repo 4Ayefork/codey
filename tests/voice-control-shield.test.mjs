@@ -64,6 +64,17 @@ function loadShield(enabled) {
   gptVoiceComposer.__reactProps$test = {
     children: { props: { id: "composer.realtime.start" } },
   };
+  const gptVoiceIcon = new FakeElement();
+  gptVoiceIcon.matches = () => true;
+  gptVoiceIcon.__reactFiber$test = {
+    memoizedProps: { className: "composer-icon-button" },
+    return: {
+      memoizedProps: {
+        tooltipContent: { props: { id: "composer.realtime.start" } },
+      },
+      return: null,
+    },
+  };
   const gptVoiceSettings = new FakeElement();
   gptVoiceSettings.__reactFiber$test = {
     memoizedProps: { id: "settings.general.realtimeVoiceHotkey.label" },
@@ -89,15 +100,27 @@ function loadShield(enabled) {
   );
   gptVoicePromotionAsset.parentElement = gptVoicePromotionVisual;
   const unrelated = new FakeElement("打开设置");
+  const unrelatedIcon = new FakeElement();
+  unrelatedIcon.__reactFiber$test = {
+    memoizedProps: { className: "composer-icon-button" },
+    return: {
+      memoizedProps: {
+        children: { props: { id: "composer.realtime.start" } },
+      },
+      return: null,
+    },
+  };
   const controls = [
     semantic,
     settings,
     localized,
     gptVoiceComposer,
+    gptVoiceIcon,
     gptVoiceSettings,
     gptVoiceBannerAction,
     gptVoiceBannerDismiss,
     unrelated,
+    unrelatedIcon,
   ];
   const listeners = new Map();
   const document = {
@@ -160,6 +183,7 @@ function loadShield(enabled) {
     fetchCalls,
     gptVoiceBannerAction,
     gptVoiceComposer,
+    gptVoiceIcon,
     gptVoicePromotion,
     gptVoiceSettings,
     listeners,
@@ -174,6 +198,7 @@ function loadShield(enabled) {
     semantic,
     settings,
     unrelated,
+    unrelatedIcon,
     webSocketCalls,
     window,
   };
@@ -187,6 +212,7 @@ test("voice slim mode blocks composer, settings, and localized voice controls", 
     runtime.settings,
     runtime.localized,
     runtime.gptVoiceComposer,
+    runtime.gptVoiceIcon,
     runtime.gptVoiceSettings,
     runtime.gptVoicePromotion,
   ]) {
@@ -199,6 +225,14 @@ test("voice slim mode blocks composer, settings, and localized voice controls", 
     null,
   );
   assert.equal(runtime.unrelated.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.unrelatedIcon.getAttribute("data-codey-voice-control-blocked"), null);
+
+  runtime.gptVoiceIcon.setAttribute("aria-label", "Send");
+  runtime.window.__codeyBlockNativeVoiceControls();
+  assert.equal(runtime.gptVoiceIcon.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.gptVoiceIcon.getAttribute("aria-hidden"), null);
+  assert.equal(runtime.gptVoiceIcon.disabled, false);
+  assert.equal(runtime.gptVoiceIcon.style.display, undefined);
 
   let prevented = false;
   let stopped = false;

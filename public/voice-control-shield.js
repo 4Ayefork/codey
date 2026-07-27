@@ -47,10 +47,14 @@
     "settings.voice.",
   ];
   const gptVoicePromotionIdPrefixes = ["realtimeVoice.homeAnnouncement."];
-  const fallbackLabelPattern = /^(?:try (?:chatgpt|codex) voice|voice|voice chat|voice chat hotkey|voice mode|start (?:new )?voice(?: chat| mode)?|stop voice chat|end voice chat|cancel voice chat|open the voice (?:chat )?control window|start or stop voice (?:chat|mode)|mute (?:your microphone|voice chat)|unmute (?:your microphone|voice chat)|dictate|dictation|start dictation|click to dictate or hold|hold(?:-| )to(?:-| )dictate|toggle dictation|global dictation|体验\s*(?:chatgpt|codex)?\s*语音|试试\s*(?:chatgpt|codex)?\s*语音|语音|语音聊天|开始语音(?:聊天|模式)?|停止语音聊天|结束语音聊天|打开语音控制窗口|听写|开始听写|全局听写|按住听写|切换听写|體驗\s*(?:chatgpt|codex)?\s*語音|試試\s*(?:chatgpt|codex)?\s*語音|語音|語音聊天|開始語音(?:聊天|模式)?|停止語音聊天|結束語音聊天|開啟語音控制視窗|聽寫|開始聽寫|全域聽寫)(?:\s*[(:（].*)?$/i;
+  const fallbackLabelPattern = /^(?:try (?:chatgpt|codex) voice|voice|voice chat|voice chat hotkey|voice mode|start (?:new )?voice(?: chat| mode)?|stop voice chat|end voice chat|cancel voice chat|open the voice (?:chat )?control window|start or stop voice (?:chat|mode)|mute (?:your microphone|voice chat)|unmute (?:your microphone|voice chat)|dictate|dictation|start dictation|stop dictation|transcribing|dismiss dictation|retry dictation|click to dictate or hold|hold(?:-| )to(?:-| )dictate|toggle dictation|global dictation|体验\s*(?:chatgpt|codex)?\s*语音|试试\s*(?:chatgpt|codex)?\s*语音|语音|语音聊天|开始语音(?:聊天|模式)?|停止语音聊天|结束语音聊天|打开语音控制窗口|听写|开始听写|停止听写|正在转录|关闭听写|重试听写|全局听写|按住听写|切换听写|體驗\s*(?:chatgpt|codex)?\s*語音|試試\s*(?:chatgpt|codex)?\s*語音|語音|語音聊天|開始語音(?:聊天|模式)?|停止語音聊天|結束語音聊天|開啟語音控制視窗|聽寫|開始聽寫|停止聽寫|正在轉錄|關閉聽寫|重試聽寫|全域聽寫)(?:\s*[(:（].*)?$/i;
+  const preservedComposerActionPattern =
+    /^(?:send|send message|submit|stop|发送|发送消息|提交|停止|傳送|傳送訊息|提交|停止)$/i;
   const reactInternalKeyPattern = /^__(?:reactProps|reactFiber|reactInternalInstance)\$.*/;
   const dictationRequestPattern = /(?:\/codex\/dictation-stream-connect-info|\/dictation\/stream)(?:[/?#]|$)/i;
   const gptVoicePromotionAssetPattern = /(?:^|\/)[^/?#]*(?:bidi[^/?#]*banner|voice[^/?#]*banner)[^/?#]*\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)/i;
+  const voiceControlSelector =
+    "button, [role=button], [role=menuitem], [role=option], [role=switch], input, label";
   const restoreResourceGuards = [];
   const blockedElementStates = new Map();
 
@@ -132,13 +136,22 @@
     voiceControlIds.has(value) ||
     voiceControlIdPrefixes.some((prefix) => value.startsWith(prefix));
 
-  const containsMatchingValue = (value, predicate, depth = 0, seen = new WeakSet()) => {
+  const reactTraversalKeys = new Set(["return", "child", "sibling", "stateNode", "_owner"]);
+  const reactAncestorTraversalKeys = new Set([...reactTraversalKeys, "children"]);
+
+  const containsMatchingValue = (
+    value,
+    predicate,
+    depth = 0,
+    seen = new WeakSet(),
+    ignoredKeys = reactTraversalKeys,
+  ) => {
     if (typeof value === "string") return predicate(value);
     if (!value || typeof value !== "object" || depth > 7 || seen.has(value)) return false;
     seen.add(value);
     for (const [key, child] of Object.entries(value)) {
-      if (["return", "child", "sibling", "stateNode", "_owner"].includes(key)) continue;
-      if (containsMatchingValue(child, predicate, depth + 1, seen)) return true;
+      if (ignoredKeys.has(key)) continue;
+      if (containsMatchingValue(child, predicate, depth + 1, seen, ignoredKeys)) return true;
     }
     return false;
   };
@@ -149,7 +162,24 @@
       .some((key) => {
         try {
           const internal = control[key];
-          return containsMatchingValue(internal?.memoizedProps ?? internal, predicate);
+          if (containsMatchingValue(internal?.memoizedProps ?? internal, predicate)) return true;
+
+          let ancestor = internal?.memoizedProps ? internal.return : null;
+          for (let depth = 0; ancestor && depth < 8; depth += 1) {
+            if (
+              containsMatchingValue(
+                ancestor.memoizedProps,
+                predicate,
+                0,
+                new WeakSet(),
+                reactAncestorTraversalKeys,
+              )
+            ) {
+              return true;
+            }
+            ancestor = ancestor.return;
+          }
+          return false;
         } catch {
           return false;
         }
@@ -162,6 +192,7 @@
       control.getAttribute("title"),
       control.textContent,
     ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    if (preservedComposerActionPattern.test(descriptor)) return false;
     if (fallbackLabelPattern.test(descriptor)) return true;
 
     return hasMatchingReactValue(control, isVoiceControlId);
@@ -232,12 +263,39 @@
     if ("disabled" in element && !element.disabled) element.disabled = true;
   };
 
+  const restoreBlockedElement = (element) => {
+    const state = blockedElementStates.get(element);
+    if (!state) return;
+    state.attributes.forEach((value, name) => {
+      if (value === null) element.removeAttribute(name);
+      else element.setAttribute(name, value);
+    });
+    element.style.removeProperty?.("display");
+    if (state.display) {
+      element.style.setProperty("display", state.display, state.displayPriority);
+    }
+    if (state.disabled !== undefined) element.disabled = state.disabled;
+    blockedElementStates.delete(element);
+  };
+
+  const restoreRepurposedVoiceControls = () => {
+    blockedElementStates.forEach((_state, element) => {
+      if (
+        element.isConnected === false
+        || (element.matches?.(voiceControlSelector) && !isVoiceControl(element))
+      ) {
+        restoreBlockedElement(element);
+      }
+    });
+  };
+
   const block = (root = document) => {
     if (!enabled) return 0;
+    restoreRepurposedVoiceControls();
     const blockedElements = new Set();
     controlsWithin(
       root,
-      "button, [role=button], [role=menuitem], [role=option], [role=switch], input, label",
+      voiceControlSelector,
     ).forEach((control) => {
       if (!isVoiceControl(control)) return;
       const target = isGptVoicePromotionControl(control)
@@ -256,18 +314,7 @@
   };
 
   const restoreBlockedElements = () => {
-    blockedElementStates.forEach((state, element) => {
-      state.attributes.forEach((value, name) => {
-        if (value === null) element.removeAttribute(name);
-        else element.setAttribute(name, value);
-      });
-      element.style.removeProperty?.("display");
-      if (state.display) {
-        element.style.setProperty("display", state.display, state.displayPriority);
-      }
-      if (state.disabled !== undefined) element.disabled = state.disabled;
-    });
-    blockedElementStates.clear();
+    [...blockedElementStates.keys()].forEach(restoreBlockedElement);
   };
 
   if (!enabled) {
@@ -289,9 +336,7 @@
 
   const stopVoiceControlEvent = (event) => {
     const control = event.target instanceof Element
-      ? event.target.closest(
-          "button, [role=button], [role=menuitem], [role=option], [role=switch], input, label",
-        )
+      ? event.target.closest(voiceControlSelector)
       : null;
     if (!isVoiceControl(control)) return;
     event.preventDefault();

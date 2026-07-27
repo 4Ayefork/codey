@@ -1003,6 +1003,27 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
+          <div className={`feature-card ${config.fastCodexStartup ? "active" : ""}`}>
+            <div className="feature-card-header">
+              <strong>Codex 慢启动保护</strong>
+              <Switch
+                checked={config.fastCodexStartup}
+                onCheckedChange={(checked) => onConfigChange({
+                  ...config,
+                  fastCodexStartup: checked,
+                })}
+                aria-label="启用 Codex 慢启动保护"
+              />
+            </div>
+            <div className="feature-card-body">
+              <small>
+                {config.fastCodexStartup
+                  ? "远程启动配置超过 1.5 秒时快速降级；正常响应保持原流程"
+                  : "完全使用 Codex 原生远程启动等待策略"}
+              </small>
+            </div>
+          </div>
+
           <div className={`feature-card ${config.fastContextTools ? "active" : ""}`}>
             <div className="feature-card-header">
               <strong>FastCtx 上下文工具</strong>
