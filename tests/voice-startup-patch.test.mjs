@@ -58,7 +58,7 @@ test("voice startup patch blocks native listeners and Dictation windows", async 
   };
 
   try {
-    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v13");
+    assert.equal((0, eval)(await loadVoicePatchExpression()), "codey-startup-patch-installed-v14");
 
     const childProcess = Module._load("node:child_process", undefined, false);
     const bareMonitor = childProcess.spawn(

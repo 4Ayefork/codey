@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v13";
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v14";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
@@ -21,6 +21,8 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const disableVoice = __DISABLE_VOICE__;
   const fastCodexStartup = __FAST_CODEX_STARTUP__;
   const statsigBootstrapTimeoutMs = 1500;
+  const statsigStartupRemainingMs =
+    `Math.max(0,(globalThis.__CODEY_STATSIG_STARTUP_DEADLINE_MS__??=Date.now()+${statsigBootstrapTimeoutMs})-Date.now())`;
   const disableWindowsOptimizations = process.platform === "win32";
   const disableMicro = disableWindowsOptimizations;
   const disableWindowsWmiSampler = disableWindowsOptimizations;
@@ -166,7 +168,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
           clientName,
           statsigModuleName,
         ) =>
-          `let ${payloadName}=await Promise.race([${bootstrapName}(${bootstrapInputName}),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig bootstrap timeout")),${statsigBootstrapTimeoutMs}))]);try{let ${clientName}=new ${statsigModuleName}.StatsigClient(`,
+          `let ${payloadName}=await Promise.race([${bootstrapName}(${bootstrapInputName}),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig bootstrap timeout")),${statsigStartupRemainingMs}))]);try{let ${clientName}=new ${statsigModuleName}.StatsigClient(`,
         "post-login Statsig bootstrap timeout",
       );
     }
@@ -182,7 +184,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         patched,
         /([$A-Z_a-z][$\w]*)\.loadingStatus\s*!==\s*`Ready`\s*&&\s*\1\.initializeAsync\(\)\.catch\s*\(/g,
         (_match, clientName) =>
-          `${clientName}.loadingStatus!==\`Ready\`&&Promise.race([${clientName}.initializeAsync(),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig async initialization timeout")),${statsigBootstrapTimeoutMs}))]).catch(`,
+          `${clientName}.loadingStatus!==\`Ready\`&&Promise.race([${clientName}.initializeAsync(),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig async initialization timeout")),${statsigStartupRemainingMs}))]).catch(`,
         "Statsig async client initialization timeout",
       );
     }
@@ -1301,7 +1303,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v13";
+  return "codey-startup-patch-installed-v14";
 })()
 "#;
 
@@ -1524,7 +1526,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v13");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v14");
     }
 
     #[test]

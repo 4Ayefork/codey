@@ -46,7 +46,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
   try {
     assert.equal(
       (0, eval)(await loadStartupPatchExpression()),
-      "codey-startup-patch-installed-v13",
+      "codey-startup-patch-installed-v14",
     );
     const electron = Module._load("electron", undefined, false);
     const upstreamHandler = async () => new Response([
@@ -141,6 +141,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
     const onUnhandledRejection = (reason) => {
       unhandledRejections.push(reason);
     };
+    delete globalThis.__CODEY_STATSIG_STARTUP_DEADLINE_MS__;
     process.on("unhandledRejection", onUnhandledRejection);
     const timeoutStartedAt = Date.now();
     let releaseAsyncInitialization;
@@ -152,31 +153,31 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
     const runAsyncStatsigGate = Function(
       `${patchedStatsigSource};return runAsyncStatsigGate`,
     )();
-    const asyncGatePromise = runAsyncStatsigGate(
-      {
-        loadingStatus: "Loading",
-        initializeAsync: () => neverCompletesAsyncInitialization,
-      },
-      {
-        Log: {
-          error: (error) => {
-            asyncInitializationErrors.push(error);
-          },
-        },
-      },
-      (loading) => {
-        asyncGateFinished.push(loading);
-      },
-    );
     try {
       await assert.rejects(syncStatsig("input"), (error) => {
         assert.match(String(error), /Codey Statsig bootstrap timeout/);
         return true;
       });
+      const asyncGatePromise = runAsyncStatsigGate(
+        {
+          loadingStatus: "Loading",
+          initializeAsync: () => neverCompletesAsyncInitialization,
+        },
+        {
+          Log: {
+            error: (error) => {
+              asyncInitializationErrors.push(error);
+            },
+          },
+        },
+        (loading) => {
+          asyncGateFinished.push(loading);
+        },
+      );
       await asyncGatePromise;
       const timeoutElapsedMs = Date.now() - timeoutStartedAt;
       assert.ok(timeoutElapsedMs >= 1_400, `timeout fired too early: ${timeoutElapsedMs}ms`);
-      assert.ok(timeoutElapsedMs < 3_000, `timeout fired too late: ${timeoutElapsedMs}ms`);
+      assert.ok(timeoutElapsedMs < 2_000, `shared timeout fired too late: ${timeoutElapsedMs}ms`);
       assert.equal(asyncInitializationErrors.length, 1);
       assert.match(
         String(asyncInitializationErrors[0]),
@@ -188,6 +189,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       await new Promise((resolve) => setImmediate(resolve));
       assert.deepEqual(unhandledRejections, []);
     } finally {
+      delete globalThis.__CODEY_STATSIG_STARTUP_DEADLINE_MS__;
       process.off("unhandledRejection", onUnhandledRejection);
     }
 
