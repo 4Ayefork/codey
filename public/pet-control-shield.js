@@ -88,6 +88,13 @@
     return blocked;
   };
 
+  const blockBeforePaint = (root) => {
+    if (!(root instanceof HTMLElement) || root.isConnected === false) return 0;
+    const hasControlCandidate =
+      root.matches?.(controlSelector) || root.querySelector?.(controlSelector);
+    return hasControlCandidate ? block(root) : 0;
+  };
+
   if (!enabled) {
     window.__codeyBlockNativePetControls = () => 0;
     window.__codeyPetControlShield = Object.freeze({ enabled, block: () => 0, isPetControl });
@@ -101,6 +108,7 @@
 
   let controlObserver = null;
   let flushTimer = 0;
+  let cancelPendingFlush = null;
   const pendingRoots = new Set();
   const pendingRootLimit = 64;
 
@@ -125,6 +133,7 @@
 
   const flushPendingRoots = () => {
     flushTimer = 0;
+    cancelPendingFlush = null;
     if (!pendingRoots.size) return;
     const roots = [...pendingRoots];
     pendingRoots.clear();
@@ -134,15 +143,28 @@
     }
   };
 
+  const queueMutationRoot = (root) => {
+    if (!(root instanceof HTMLElement)) return;
+    if (blockBeforePaint(root) > 0) return;
+    addPendingRoot(root);
+  };
+
   const schedulePendingFlush = () => {
     // Deliberately non-resetting: a sustained mutation stream must not be able
-    // to starve the flush indefinitely.
+    // to starve the flush indefinitely. Prefer rAF so menu controls inserted
+    // during a click are blocked before the next paint instead of flashing.
     if (flushTimer) return;
+    if (typeof window.requestAnimationFrame === "function") {
+      flushTimer = window.requestAnimationFrame(flushPendingRoots);
+      cancelPendingFlush = () => window.cancelAnimationFrame?.(flushTimer);
+      return;
+    }
     if (typeof window.setTimeout !== "function") {
       flushPendingRoots();
       return;
     }
-    flushTimer = window.setTimeout(flushPendingRoots, 50);
+    flushTimer = window.setTimeout(flushPendingRoots, 0);
+    cancelPendingFlush = () => window.clearTimeout?.(flushTimer);
   };
 
   if (typeof MutationObserver === "function" && document.documentElement) {
@@ -155,13 +177,13 @@
         const target = mutationRoot(mutation.target);
         if (mutation.type === "attributes") {
           const containingControl = target?.closest?.(controlSelector);
-          if (containingControl) addPendingRoot(containingControl);
+          if (containingControl) queueMutationRoot(containingControl);
           continue;
         }
         const containingControl = target?.closest?.(controlSelector);
-        if (containingControl) addPendingRoot(containingControl);
+        if (containingControl) queueMutationRoot(containingControl);
         for (const node of mutation.addedNodes || []) {
-          addPendingRoot(mutationRoot(node));
+          queueMutationRoot(mutationRoot(node));
         }
       }
       if (pendingRoots.size) schedulePendingFlush();
@@ -192,10 +214,9 @@
   window.__codeyPetControlShield = Object.freeze({ enabled, block, isPetControl });
   window.__codeyPetControlShieldCleanup = () => {
     controlObserver?.disconnect();
-    if (flushTimer && typeof window.clearTimeout === "function") {
-      window.clearTimeout(flushTimer);
-    }
+    if (flushTimer) cancelPendingFlush?.();
     flushTimer = 0;
+    cancelPendingFlush = null;
     pendingRoots.clear();
     eventNames.forEach((eventName) => {
       document.removeEventListener(eventName, stopPetControlEvent, true);

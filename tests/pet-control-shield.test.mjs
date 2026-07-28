@@ -9,16 +9,21 @@ const template = readFileSync(
 );
 
 class FakeElement {
-  constructor(text = "", isControl = true) {
+  constructor(text = "", isControl = true, children = []) {
     this.textContent = text;
     this.attributes = new Map();
+    this.children = children;
     this.disabled = false;
     this.isControl = isControl;
+    this.parentElement = null;
     this.style = {
       setProperty: (name, value, priority) => {
         this.style[name] = `${value}:${priority}`;
       },
     };
+    children.forEach((child) => {
+      child.parentElement = this;
+    });
   }
 
   getAttribute(name) {
@@ -38,7 +43,23 @@ class FakeElement {
   }
 
   matches() {
-    return true;
+    return this.isControl;
+  }
+
+  querySelector() {
+    return this.querySelectorAll()[0] ?? null;
+  }
+
+  querySelectorAll() {
+    const controls = [];
+    const visit = (node) => {
+      for (const child of node.children) {
+        if (child.isControl) controls.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return controls;
   }
 }
 
@@ -77,7 +98,9 @@ function loadShield(enabled) {
   const window = {};
   window.window = window;
   const pendingTimers = new Map();
+  const pendingAnimationFrames = new Map();
   let nextTimerId = 1;
+  let nextAnimationFrameId = 1;
   let scheduledFlushes = 0;
   window.setTimeout = (callback) => {
     const id = nextTimerId;
@@ -88,6 +111,21 @@ function loadShield(enabled) {
   };
   window.clearTimeout = (id) => {
     pendingTimers.delete(id);
+  };
+  window.requestAnimationFrame = (callback) => {
+    const id = nextAnimationFrameId;
+    nextAnimationFrameId += 1;
+    scheduledFlushes += 1;
+    pendingAnimationFrames.set(id, callback);
+    return id;
+  };
+  window.cancelAnimationFrame = (id) => {
+    pendingAnimationFrames.delete(id);
+  };
+  const runPendingAnimationFrames = () => {
+    const callbacks = [...pendingAnimationFrames.values()];
+    pendingAnimationFrames.clear();
+    callbacks.forEach((callback) => callback());
   };
   const runPendingTimers = () => {
     const callbacks = [...pendingTimers.values()];
@@ -117,6 +155,13 @@ function loadShield(enabled) {
     get pendingTimerCount() {
       return pendingTimers.size;
     },
+    get pendingAnimationFrameCount() {
+      return pendingAnimationFrames.size;
+    },
+    get pendingFlushCount() {
+      return pendingTimers.size + pendingAnimationFrames.size;
+    },
+    runPendingAnimationFrames,
     runPendingTimers,
     get scheduledFlushes() {
       return scheduledFlushes;
@@ -158,22 +203,23 @@ test("disabling pet slim mode restores native pet controls", () => {
   assert.equal(runtime.window.__codeyBlockNativePetControls(), 0);
 });
 
-test("pet slim mode blocks controls in the insertion observer callback", () => {
+test("pet slim mode blocks inserted menu controls before a deferred flush", () => {
   const runtime = loadShield(true);
   const dynamic = new FakeElement("显示宠物");
+  const menu = new FakeElement("", false, [dynamic]);
 
   runtime.mutationCallback([{
-    addedNodes: [dynamic],
+    addedNodes: [menu],
     target: runtime.documentElement,
     type: "childList",
   }]);
-  runtime.runPendingTimers();
 
   assert.equal(dynamic.getAttribute("data-codey-pet-control-blocked"), "true");
   assert.equal(dynamic.getAttribute("aria-hidden"), "true");
   assert.equal(dynamic.getAttribute("inert"), "");
   assert.equal(dynamic.style.display, "none:important");
   assert.equal(dynamic.disabled, true);
+  assert.equal(runtime.pendingFlushCount, 0);
   assert.equal(runtime.observerOptions.attributes, true);
   assert.deepEqual([...runtime.observerOptions.attributeFilter], ["aria-label", "role", "title"]);
   assert.equal(runtime.observerOptions.childList, true);
@@ -198,10 +244,12 @@ test("streaming mutation batches coalesce into a single deferred sweep", () => {
     1,
     "a sustained mutation stream must not schedule one flush per batch",
   );
-  assert.equal(runtime.pendingTimerCount, 1);
-
-  runtime.runPendingTimers();
+  assert.equal(runtime.pendingFlushCount, 1);
   assert.equal(runtime.pendingTimerCount, 0);
+  assert.equal(runtime.pendingAnimationFrameCount, 1);
+
+  runtime.runPendingAnimationFrames();
+  assert.equal(runtime.pendingFlushCount, 0);
 });
 
 test("pet control verdicts are re-evaluated when React repurposes the element", () => {
