@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::config::ExperimentalFeaturesConfig;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v16";
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v17";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
@@ -57,6 +57,12 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const originalLoad = Module._load;
   const isInspectorArgument = (argument) =>
     typeof argument === "string" && /^--inspect(?:-brk)?(?:=|$)/.test(argument);
+  // Each renderer gate is optional and independent. Codex bundles are minified
+  // and reshape between releases, so a single drifted anchor must skip only its
+  // own gate — never discard the sibling gates that are still compatible. That
+  // is what previously hid the whole Fast/service-tier control on the builds
+  // where one unrelated anchor moved: an exception here aborted every gate on
+  // the asset. Log and return the source unchanged so the rest still apply.
   const replaceUniqueRendererGate = (source, pattern, replacement, name) => {
     let count = 0;
     const patched = source.replace(pattern, (...args) => {
@@ -64,18 +70,12 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       return typeof replacement === "function" ? replacement(...args) : replacement;
     });
     if (count !== 1) {
-      throw new Error(`Codey ${name} renderer gate matched ${count} times`);
-    }
-    return patched;
-  };
-  const replaceRendererGates = (source, pattern, replacement, name) => {
-    let count = 0;
-    const patched = source.replace(pattern, (...args) => {
-      count += 1;
-      return typeof replacement === "function" ? replacement(...args) : replacement;
-    });
-    if (count === 0) {
-      throw new Error(`Codey ${name} renderer gate matched 0 times`);
+      try {
+        console.error(
+          `Codey skipped an incompatible Codex renderer patch: ${name} gate matched ${count} times`,
+        );
+      } catch {}
+      return source;
     }
     return patched;
   };
@@ -152,26 +152,10 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         "service tier request",
       );
     }
-    if (
-      source.includes("composer.intelligenceDropdown.model.title") &&
-      source.includes("composer.intelligenceDropdown.model.rowLabel") &&
-      source.includes("modelPickerTriggerConfig:") &&
-      source.includes("selectedServiceTierIconKind:") &&
-      source.includes("showFastServiceTierIndicator:")
-    ) {
-      patched = replaceRendererGates(
-        patched,
-        /(\b[$A-Z_a-z][$\w]*\s*=\s*)(?:!\s*[$A-Z_a-z][$\w]*\s*&&\s*)?([$A-Z_a-z][$\w]*)\s*!==?\s*null\s*&&\s*[$A-Z_a-z][$\w]*\s*\(\s*[$A-Z_a-z][$\w]*\s*,\s*[$A-Z_a-z][$\w]*\s*\)\s*\?\s*\2\s*:\s*null/g,
-        (_match, assignment) => `${assignment}null`,
-        "model row fast icon",
-      );
-      patched = replaceUniqueRendererGate(
-        patched,
-        /selectedServiceTierIconKind\s*:\s*[$A-Z_a-z][$\w]*\s*\?\s*null\s*:\s*[$A-Z_a-z][$\w]*\s*,\s*stripGptPrefix\s*:/g,
-        "selectedServiceTierIconKind:null,stripGptPrefix:",
-        "model list fast icons",
-      );
-    }
+    // The native Fast service-tier icon is intentionally left in place. Codex's
+    // own `supports(model, tier)` guard already restricts it to models that
+    // actually expose that tier, so the current (new-style) icon renders for
+    // every Fast-capable model instead of being blanked out.
     if (
       fastCodexStartup &&
       source.includes(
@@ -1368,7 +1352,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v16";
+  return "codey-startup-patch-installed-v17";
 })()
 "#;
 
@@ -1598,7 +1582,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v16");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v17");
     }
 
     #[test]

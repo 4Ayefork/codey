@@ -59,7 +59,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
           remote_compaction_v2: false,
         }),
       ),
-      "codey-startup-patch-installed-v16",
+      "codey-startup-patch-installed-v17",
     );
     const electron = Module._load("electron", undefined, false);
     const upstreamHandler = async () =>
@@ -79,11 +79,13 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
     });
     assert.equal(response.ok, true);
     assert.match(await response.text(), /useHiddenModels:/);
-    assert.equal(patchErrors.length, 1);
-    assert.match(
-      String(patchErrors[0][0]),
-      /incompatible Codex renderer patch/,
-    );
+    // Each incompatible gate is skipped independently (and logged) instead of one
+    // throw discarding every gate on the asset. The response is never blocked and
+    // the source is returned unchanged when nothing matched.
+    assert.ok(patchErrors.length >= 1);
+    for (const [message] of patchErrors) {
+      assert.match(String(message), /incompatible Codex renderer patch/);
+    }
 
     const statsigSource = [
       "function Ftu(e){",
@@ -327,7 +329,10 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       process.off("unhandledRejection", onUnhandledRejection);
     }
 
-    assert.equal(patchErrors.length, 1);
+    // Only the first (fully incompatible) bundle logged skips — two gates whose
+    // anchors were present but whose shapes did not match. The statsig and
+    // interaction bundles patched cleanly, so no further skips were logged.
+    assert.equal(patchErrors.length, 2);
   } finally {
     console.error = nativeConsoleError;
     Module._load = nativeLoad;

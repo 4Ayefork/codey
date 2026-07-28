@@ -46,7 +46,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
   try {
     assert.equal(
       (0, eval)(await loadPatchExpression()),
-      "codey-startup-patch-installed-v16",
+      "codey-startup-patch-installed-v17",
     );
     Module._load("electron", undefined, false).protocol.handle(
       "app",
@@ -341,173 +341,46 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
       /if\(n!==`chatgpt`\)return!0/,
     );
 
-    const fastModelPresentationSource = (rowIconExpression) => [
+    // The Fast service-tier icon is no longer blanked out. The icon-nulling gate
+    // was removed, so patching leaves Codex's native (new-style) indicator
+    // expressions untouched and its own supports(model, tier) guard decides where
+    // the icon renders.
+    const fastModelPresentationSource = [
       "const nativeModelPickerMarkers=[",
       "`composer.intelligenceDropdown.model.title`,",
       "`composer.intelligenceDropdown.model.rowLabel`];",
-      "function triggerConfig(hideLabel,powerSelections){",
-      "let workMode=true,copilot=false,status=`ok`,selection=null,view=`advanced`,fallbackView=`advanced`,",
-      "compact=workMode&&powerSelections.length>=4&&!copilot&&status!==`error`,",
-      "menu=compact&&selection==null?`advanced`:view??fallbackView,",
-      "configEnabled=compact&&!hideLabel,focusTarget=compact?`simple`:`advanced`;",
-      "return {menu,focusTarget,powerSelections,modelPickerTriggerConfig:configEnabled?",
-      "{showFastServiceTierIndicator:true}:void 0}}",
-      "function nativePicker(modelPickerTriggerConfig,powerSelections,selectedServiceTierIconKind){",
-      "let workMode=true,modelOptionsDisabled=false,reasoningEffortDisabled=false,",
-      "compact=workMode&&powerSelections.length>=4&&!modelOptionsDisabled&&!reasoningEffortDisabled,",
+      "function nativePicker(powerSelections,selectedServiceTierIconKind){",
+      "let workMode=true,compact=workMode&&powerSelections.length>=4,",
       "useCompact=compact,selectedModel={},selectedServiceTier=`priority`;",
       "let selectedIcon=selectedServiceTierIconKind!==null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
-      `let rowIcon=${rowIconExpression};`,
+      "let rowIcon=selectedServiceTierIconKind!==null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
       "let options=[`gpt-5.5`,`claude-opus-4-8`].map(model=>({",
       "model,selectedServiceTierIconKind:useCompact?null:selectedServiceTierIconKind,stripGptPrefix:useCompact}));",
-      "if(compact&&modelPickerTriggerConfig!=null)return {kind:`solid`,options,rowIcon};",
-      "return {kind:`outline`,options,rowIcon,selectedIcon}}",
+      "return {options,rowIcon,selectedIcon}}",
       "function supports(){return true}",
     ].join("");
-    for (const rowIconExpression of [
-      "!useCompact&&selectedServiceTierIconKind!=null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null",
-      "selectedServiceTierIconKind!==null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null",
-    ]) {
-      const patchedFastModelPresentation = await patchAsset(
-        fastModelPresentationSource(rowIconExpression),
-        "app://-/assets/codex-composer-adapter-DDUHejoe.js",
-      );
-      assert.match(
-        patchedFastModelPresentation,
-        /configEnabled=compact&&!hideLabel/,
-      );
-      assert.match(patchedFastModelPresentation, /selectedIcon=null/);
-      assert.match(patchedFastModelPresentation, /rowIcon=null/);
-      assert.match(
-        patchedFastModelPresentation,
-        /selectedServiceTierIconKind:null,stripGptPrefix:/,
-      );
-      assert.match(
-        patchedFastModelPresentation,
-        /if\(compact&&modelPickerTriggerConfig!=null\)/,
-      );
-      const nativeModelPicker = Function(
-        `${patchedFastModelPresentation};return {nativePicker,triggerConfig};`,
-      )();
-      const thirdPartyTrigger = nativeModelPicker.triggerConfig(false, []);
-      const thirdPartyPresentation = nativeModelPicker.nativePicker(
-        thirdPartyTrigger.modelPickerTriggerConfig,
-        [],
-        "fast",
-      );
-      assert.equal(thirdPartyTrigger.modelPickerTriggerConfig, undefined);
-      assert.equal(thirdPartyPresentation.kind, "outline");
-      assert.equal(thirdPartyPresentation.rowIcon, null);
-      assert.ok(thirdPartyPresentation.options.every(
-        (option) => option.selectedServiceTierIconKind === null,
-      ));
-
-      const compactSelections = ["one", "two", "three", "four"];
-      const compactTrigger = nativeModelPicker.triggerConfig(
-        false,
-        compactSelections,
-      );
-      const compactPresentation = nativeModelPicker.nativePicker(
-        compactTrigger.modelPickerTriggerConfig,
-        compactSelections,
-        "fast",
-      );
-      assert.ok(compactTrigger.modelPickerTriggerConfig);
-      assert.equal(compactPresentation.kind, "solid");
-      assert.equal(compactPresentation.rowIcon, null);
-    }
-
-    const consolidatedFastModelPresentationSource = [
-      "const consolidatedPickerMarkers=[",
-      "`composer.intelligenceDropdown.model.title`,",
-      "`composer.intelligenceDropdown.model.rowLabel`];",
-      "function triggerConfigV2(hideLabel,powerSelections){",
-      "let workMode=true,compact=workMode&&powerSelections.length>=4,",
-      "configEnabled=compact&&!hideLabel,focusTarget=compact?`simple`:`advanced`;",
-      "return {focusTarget,modelPickerTriggerConfig:configEnabled?",
-      "{showFastServiceTierIndicator:true}:void 0}}",
-      "function unrelatedFastShapes(workMode,hideDecoy,enabled,compact,otherConfig){",
-      "let decoyEnabled=workMode&&!hideDecoy,next=enabled?`a`:`b`;",
-      "if(compact&&otherConfig!=null)return {decoyEnabled,next};return null}",
-      "function nativePickerV2(input,powerSelections,selectedServiceTierIconKind){",
-      "let {modelPickerTriggerConfig:config}=input,workMode=true,",
-      "compact=workMode&&powerSelections.length>=4,useCompact=compact,",
-      "selectedModel={},selectedServiceTier=`priority`,otherConfig=null;",
-      "let selectedIcon=!useCompact&&selectedServiceTierIconKind!=null&&",
-      "supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
-      "let rowIcon=selectedServiceTierIconKind!==null&&",
-      "supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
-      "let options=[`gpt-5.5`,`claude-opus-4-8`].map(model=>({",
-      "model,selectedServiceTierIconKind:useCompact?null:selectedServiceTierIconKind,",
-      "stripGptPrefix:useCompact}));",
-      "if(compact&&otherConfig!=null)return {kind:`decoy`};",
-      "if(compact&&config!=null)return {kind:`solid`,options,rowIcon,selectedIcon};",
-      "return {kind:`outline`,options,rowIcon,selectedIcon}}",
-      "function supports(){return true}",
-    ].join("");
-    const patchedConsolidatedFastPresentation = await patchAsset(
-      consolidatedFastModelPresentationSource,
-      "app://-/assets/app-initial-BTphDPeq.js",
+    const patchedFastModelPresentation = await patchAsset(
+      fastModelPresentationSource,
+      "app://-/assets/codex-composer-adapter-DDUHejoe.js",
     );
-    assert.match(
-      patchedConsolidatedFastPresentation,
-      /configEnabled=compact&&!hideLabel/,
-    );
-    assert.match(
-      patchedConsolidatedFastPresentation,
-      /decoyEnabled=workMode&&!hideDecoy/,
-    );
-    assert.match(
-      patchedConsolidatedFastPresentation,
-      /if\(compact&&otherConfig!=null\)/,
-    );
-    assert.match(patchedConsolidatedFastPresentation, /selectedIcon=null/);
-    assert.match(patchedConsolidatedFastPresentation, /rowIcon=null/);
-    assert.match(
-      patchedConsolidatedFastPresentation,
+    // Icon expressions pass through unchanged — nothing is forced to null.
+    assert.equal(patchedFastModelPresentation, fastModelPresentationSource);
+    assert.doesNotMatch(patchedFastModelPresentation, /rowIcon=null/);
+    assert.doesNotMatch(patchedFastModelPresentation, /selectedIcon=null/);
+    assert.doesNotMatch(
+      patchedFastModelPresentation,
       /selectedServiceTierIconKind:null,stripGptPrefix:/,
     );
-    assert.match(
-      patchedConsolidatedFastPresentation,
-      /if\(compact&&config!=null\)/,
-    );
-    const nativeModelPickerV2 = Function(
-      `${patchedConsolidatedFastPresentation};` +
-        "return {nativePickerV2,triggerConfigV2};",
+    const nativeModelPicker = Function(
+      `${patchedFastModelPresentation};return {nativePicker};`,
     )();
-    const thirdPartyTriggerV2 = nativeModelPickerV2.triggerConfigV2(false, []);
-    const thirdPartyPresentationV2 = nativeModelPickerV2.nativePickerV2(
-      {
-        modelPickerTriggerConfig:
-          thirdPartyTriggerV2.modelPickerTriggerConfig,
-      },
-      [],
-      "fast",
-    );
-    assert.equal(
-      thirdPartyTriggerV2.modelPickerTriggerConfig,
-      undefined,
-    );
-    assert.equal(thirdPartyPresentationV2.kind, "outline");
-    assert.equal(thirdPartyPresentationV2.rowIcon, null);
-    assert.equal(thirdPartyPresentationV2.selectedIcon, null);
-    assert.ok(thirdPartyPresentationV2.options.every(
-      (option) => option.selectedServiceTierIconKind === null,
+    // A Fast-capable model in the expanded picker keeps the native icon.
+    const expandedPresentation = nativeModelPicker.nativePicker([], "fast");
+    assert.equal(expandedPresentation.rowIcon, "fast");
+    assert.equal(expandedPresentation.selectedIcon, "fast");
+    assert.ok(expandedPresentation.options.every(
+      (option) => option.selectedServiceTierIconKind === "fast",
     ));
-
-    const compactSelectionsV2 = ["one", "two", "three", "four"];
-    const compactTriggerV2 = nativeModelPickerV2.triggerConfigV2(
-      false,
-      compactSelectionsV2,
-    );
-    const compactPresentationV2 = nativeModelPickerV2.nativePickerV2(
-      { modelPickerTriggerConfig: compactTriggerV2.modelPickerTriggerConfig },
-      compactSelectionsV2,
-      "fast",
-    );
-    assert.ok(compactTriggerV2.modelPickerTriggerConfig);
-    assert.equal(compactPresentationV2.kind, "solid");
-    assert.equal(compactPresentationV2.rowIcon, null);
 
     for (const url of [
       "app://-/assets/app-initial.js",
