@@ -219,7 +219,6 @@
       [data-app-action-sidebar-thread-id][data-app-action-sidebar-thread-title],
       [data-app-action-sidebar-project-row][data-app-action-sidebar-project-id] { position: relative; }
       [data-app-action-sidebar-thread-row] [${threadUpdatedAtAttribute}] { display: block; flex: 0 0 auto; min-width: 26px; margin-inline-start: auto; color: inherit; font: 400 12px/16px system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: 0; text-align: end; opacity: .52; pointer-events: none; white-space: nowrap; }
-      [data-app-action-sidebar-thread-row]:has([data-hover-card-open-immediately][class*="group-hover:hidden"]) [${threadUpdatedAtAttribute}] { display: none; }
       [data-app-action-sidebar-thread-row]:hover [${threadUpdatedAtAttribute}],
       [data-app-action-sidebar-thread-row]:has(:focus-visible) [${threadUpdatedAtAttribute}] { opacity: 0; }
       [${sessionExportAttribute}], [${tasksImportAttribute}], [${sessionDeleteAttribute}] { -webkit-app-region: no-drag !important; flex: 0 0 auto; pointer-events: auto !important; }
