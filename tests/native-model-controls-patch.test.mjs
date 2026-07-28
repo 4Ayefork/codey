@@ -46,7 +46,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
   try {
     assert.equal(
       (0, eval)(await loadPatchExpression()),
-      "codey-startup-patch-installed-v18",
+      "codey-startup-patch-installed-v19",
     );
     Module._load("electron", undefined, false).protocol.handle(
       "app",
@@ -183,7 +183,11 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
     );
     assert.match(
       patchedServiceTierUi,
-      /p=!f/,
+      /p=!0/,
+    );
+    assert.doesNotMatch(
+      patchedServiceTierUi,
+      /featureRequirements\?\.fast_mode/,
     );
     const serviceTierAllowed = Function(
       `${patchedServiceTierUi};return U;`,
@@ -326,6 +330,171 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
       null,
     );
 
+    const modelAwareServiceTierRuntimeSource = [
+      "const runtimeMarkers=[`isServiceTierAllowed`,`serviceTierForRequest:`,`availableOptions:`];",
+      "function resolveTier(existing,tier,isAllowed,resolver,normalize,model){",
+      "let request,selected;",
+      "request=existing?isAllowed?tier:null:resolver(model,tier,isAllowed),",
+      "selected=request==null?null:normalize(model,request);",
+      "let label=labelTier(request??null);",
+      "return {availableOptions:[],label,selectedServiceTier:selected,serviceTierForRequest:request}}",
+      "function resolveConfiguredTier(model,tier,isAllowed=true){",
+      "if(!isAllowed)return null;",
+      "return tier==null?model.defaultServiceTier??null:tier}",
+      "function normalizeTier(model,tier){",
+      "return model.serviceTiers.includes(tier)?tier:null}",
+      "function labelTier(tier){return tier??`standard`}",
+      "function serviceTierLoading(modelSettings,catalogLoading,configState,conversation,requirementsPending){",
+      "let loading=modelSettings.isLoading||catalogLoading||configState.isLoading||",
+      "conversation==null&&requirementsPending,done=true;",
+      "return {done,loading}}",
+      "function composer(isAllowed,settings,isLoading,register){",
+      "let fastOption=settings.availableOptions.find(e=>e.iconKind===`fast`)?.value,",
+      "show=isAllowed&&settings.availableOptions.length>1;",
+      "register(`composer.toggleFastMode`,()=>{},",
+      "{enabled:isAllowed&&!isLoading&&fastOption!=null});",
+      "return {fastOption,show}}",
+      "function speedCommand(isAllowed,settings){",
+      "const marker=`composer.speedSlashCommand.disableDescription`;",
+      "return settings.availableOptions.map(e=>({",
+      "enabled:isAllowed&&!settings.isLoading,isSelected:false,marker,option:e}))}",
+    ].join("");
+    const patchedModelAwareServiceTierRuntime = await patchAsset(
+      modelAwareServiceTierRuntimeSource,
+    );
+    assert.doesNotMatch(
+      patchedModelAwareServiceTierRuntime,
+      /show=isAllowed&&/,
+    );
+    assert.doesNotMatch(
+      patchedModelAwareServiceTierRuntime,
+      /enabled:isAllowed&&!isLoading/,
+    );
+    assert.doesNotMatch(
+      patchedModelAwareServiceTierRuntime,
+      /enabled:isAllowed&&!settings\.isLoading/,
+    );
+    const modelAwareRuntime = Function(
+      `${patchedModelAwareServiceTierRuntime};` +
+        "return {composer,normalizeTier,resolveConfiguredTier,resolveTier,serviceTierLoading,speedCommand};",
+    )();
+    const supportedModel = { serviceTiers: ["priority"] };
+    const unsupportedModel = { serviceTiers: [] };
+    assert.equal(
+      modelAwareRuntime.resolveTier(
+        false,
+        "priority",
+        false,
+        modelAwareRuntime.resolveConfiguredTier,
+        modelAwareRuntime.normalizeTier,
+        supportedModel,
+      ).serviceTierForRequest,
+      "priority",
+    );
+    assert.equal(
+      modelAwareRuntime.resolveTier(
+        false,
+        "priority",
+        false,
+        modelAwareRuntime.resolveConfiguredTier,
+        modelAwareRuntime.normalizeTier,
+        unsupportedModel,
+      ).serviceTierForRequest,
+      null,
+    );
+    assert.equal(
+      modelAwareRuntime.serviceTierLoading(
+        { isLoading: false },
+        false,
+        { isLoading: false },
+        null,
+        true,
+      ).loading,
+      false,
+    );
+    assert.equal(
+      modelAwareRuntime.serviceTierLoading(
+        { isLoading: true },
+        false,
+        { isLoading: false },
+        null,
+        false,
+      ).loading,
+      true,
+    );
+    assert.equal(
+      modelAwareRuntime.resolveTier(
+        true,
+        "priority",
+        false,
+        modelAwareRuntime.resolveConfiguredTier,
+        modelAwareRuntime.normalizeTier,
+        unsupportedModel,
+      ).serviceTierForRequest,
+      null,
+    );
+    const registeredCommands = [];
+    const supportedControls = modelAwareRuntime.composer(
+      false,
+      {
+        availableOptions: [
+          { iconKind: null, value: null },
+          { iconKind: "fast", value: "priority" },
+        ],
+      },
+      false,
+      (_name, _handler, options) => registeredCommands.push(options),
+    );
+    assert.equal(supportedControls.show, true);
+    assert.equal(registeredCommands[0].enabled, true);
+    assert.equal(
+      modelAwareRuntime.composer(
+        true,
+        { availableOptions: [{ iconKind: null, value: null }] },
+        false,
+        () => {},
+      ).show,
+      false,
+    );
+    assert.equal(
+      modelAwareRuntime.speedCommand(
+        false,
+        {
+          availableOptions: [{ iconKind: "fast", value: "priority" }],
+          isLoading: false,
+        },
+      )[0].enabled,
+      true,
+    );
+
+    const serviceTierSanitizerSource = [
+      "async function sanitize(e,t){if(e==null)return null;",
+      "try{if((await t()).requirements?.featureRequirements?.fast_mode===!1)",
+      "return null}catch(e){console.warn(`Failed to load config requirements for service tier`)}",
+      "return e}",
+    ].join("");
+    const patchedServiceTierSanitizer = await patchAsset(
+      serviceTierSanitizerSource,
+    );
+    assert.doesNotMatch(
+      patchedServiceTierSanitizer,
+      /featureRequirements\?\.fast_mode/,
+    );
+    const sanitizeServiceTier = Function(
+      `${patchedServiceTierSanitizer};return sanitize;`,
+    )();
+    let entitlementReads = 0;
+    assert.equal(
+      await sanitizeServiceTier("priority", async () => {
+        entitlementReads += 1;
+        return {
+          requirements: { featureRequirements: { fast_mode: false } },
+        };
+      }),
+      "priority",
+    );
+    assert.equal(entitlementReads, 0);
+
     const serviceTierRequestSource = [
       "async function Qs(e,t){let n=await Js(e,t);",
       "if(n!==`chatgpt`)return!1;",
@@ -338,8 +507,25 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
     );
     assert.match(
       patchedServiceTierRequest,
-      /if\(n!==`chatgpt`\)return!0/,
+      /async function Qs\(e,t\)\{return!0\}/,
     );
+    assert.doesNotMatch(
+      patchedServiceTierRequest,
+      /featureRequirements\?\.fast_mode/,
+    );
+    const serviceTierRequestAllowed = Function(
+      "Js",
+      "rt",
+      `${patchedServiceTierRequest};return Qs;`,
+    )(
+      async () => {
+        throw new Error("auth lookup must not run");
+      },
+      async () => {
+        throw new Error("entitlement lookup must not run");
+      },
+    );
+    assert.equal(await serviceTierRequestAllowed({}, "host"), true);
 
     // Third-party catalogs may not meet Codex's native power-selection threshold.
     // Codey still uses the modern trigger, whose Fast indicator is filled, while
@@ -431,7 +617,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
     ]) {
       assert.match(
         await patchAsset(serviceTierRequestSource, url),
-        /if\(n!==`chatgpt`\)return!0/,
+        /async function Qs\(e,t\)\{return!0\}/,
       );
     }
     assert.equal(

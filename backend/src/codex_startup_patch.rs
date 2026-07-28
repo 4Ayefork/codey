@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::config::ExperimentalFeaturesConfig;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v18";
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v19";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
@@ -153,18 +153,81 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       source.includes("featureRequirements?.fast_mode") &&
       source.includes("authMethod:")
     ) {
+      // Model serviceTiers are the authority for whether the control exists.
+      // Account requirements and their loading state must never hide it.
       patched = replaceUniqueRendererGate(
         patched,
         /(\b([$A-Z_a-z][$\w]*)\s*=\s*)([$A-Z_a-z][$\w]*)\s*&&\s*!([$A-Z_a-z][$\w]*)\s*&&\s*([$A-Z_a-z][$\w]*)\s*!=\s*null\s*&&\s*\5\?\.requirements\?\.featureRequirements\?\.fast_mode\s*!==\s*!1/g,
-        (
-          _match,
-          assignment,
-          _resultName,
-          _chatGptAuthName,
-          loadingName,
-        ) =>
-          `${assignment}!${loadingName}`,
+        (_match, assignment) => `${assignment}!0`,
         "service tier UI",
+      );
+    }
+    if (
+      source.includes("isServiceTierAllowed") &&
+      source.includes("serviceTierForRequest:") &&
+      source.includes("availableOptions:")
+    ) {
+      // Preserve the model-aware resolver but remove its entitlement argument.
+      // This also covers builds where the permission provider above reshaped.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(\?\s*)([$A-Z_a-z][$\w]*)\s*\?\s*([$A-Z_a-z][$\w]*)\s*:\s*null\s*:\s*([$A-Z_a-z][$\w]*)\(\s*([$A-Z_a-z][$\w]*)\s*,\s*\3\s*,\s*\2\s*\)/g,
+        (_match, _questionMark, _isAllowedName, tierName, resolverName, modelName) =>
+          `?${tierName}:${resolverName}(${modelName},${tierName})`,
+        "service tier selection permission",
+      );
+      // Reuse Codex's normalized selected tier for the request too. A Fast tier
+      // left over from another model must become null after switching to a
+      // model whose serviceTiers do not contain it.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(\b([$A-Z_a-z][$\w]*)\s*=\s*([$A-Z_a-z][$\w]*)\s*==\s*null\s*\?\s*null\s*:\s*([$A-Z_a-z][$\w]*)\(\s*([$A-Z_a-z][$\w]*)\s*,\s*\3\s*\))(?=\s*;\s*let\s+[$A-Z_a-z][$\w]*\s*=\s*[$A-Z_a-z][$\w]*\(\s*\3\s*\?\?\s*null\s*\))/g,
+        (_match, selectedExpression, selectedName, requestTierName) =>
+          `${selectedExpression},${requestTierName}=${selectedName}`,
+        "service tier model validation",
+      );
+      // Requirements can remain pending independently of the model catalog.
+      // Do not report that entitlement fetch as service-tier option loading.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(\b([$A-Z_a-z][$\w]*)\s*=\s*([$A-Z_a-z][$\w]*)\.isLoading\s*\|\|\s*([$A-Z_a-z][$\w]*)\s*\|\|\s*([$A-Z_a-z][$\w]*)\.isLoading)\s*\|\|\s*[$A-Z_a-z][$\w]*\s*==\s*null\s*&&\s*[$A-Z_a-z][$\w]*(?=\s*,)/g,
+        (_match, modelLoadingExpression) => modelLoadingExpression,
+        "service tier entitlement loading",
+      );
+    }
+    if (
+      source.includes("composer.toggleFastMode") &&
+      source.includes("isServiceTierAllowed") &&
+      source.includes("availableOptions.length")
+    ) {
+      // The current model's options decide whether the speed control exists.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(\b([$A-Z_a-z][$\w]*)\s*=\s*)[$A-Z_a-z][$\w]*\s*&&\s*([$A-Z_a-z][$\w]*)\.availableOptions\.length\s*>\s*1(?=\s*[,;][\s\S]{0,2048}?`composer\.toggleFastMode`)/g,
+        (_match, assignment, _resultName, settingsName) =>
+          `${assignment}${settingsName}.availableOptions.length>1`,
+        "model-aware service tier control",
+      );
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(`composer\.toggleFastMode`[\s\S]{0,512}?\{\s*enabled\s*:\s*)[$A-Z_a-z][$\w]*\s*&&\s*!\s*([$A-Z_a-z][$\w]*)\s*&&\s*([$A-Z_a-z][$\w]*)\s*!=\s*null/g,
+        (_match, prefix, loadingName, fastOptionName) =>
+          `${prefix}!${loadingName}&&${fastOptionName}!=null`,
+        "model-aware Fast toggle",
+      );
+    }
+    if (
+      source.includes("composer.speedSlashCommand.disableDescription") &&
+      source.includes("isServiceTierAllowed") &&
+      source.includes("availableOptions.map")
+    ) {
+      // These commands are created only for service tiers exposed by the model.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /(enabled\s*:\s*)[$A-Z_a-z][$\w]*\s*&&\s*!\s*([$A-Z_a-z][$\w]*)\.isLoading(?=\s*,\s*isSelected\s*:)/g,
+        (_match, assignment, settingsName) =>
+          `${assignment}!${settingsName}.isLoading`,
+        "model-aware service tier commands",
       );
     }
     if (
@@ -181,15 +244,28 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       );
     }
     if (
+      source.includes("Failed to load config requirements for service tier") &&
+      source.includes("featureRequirements?.fast_mode")
+    ) {
+      // A tier selected from the current model must not be stripped from thread
+      // requests by an account entitlement lookup.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /if\s*\(\s*\(\s*await\s+([$A-Z_a-z][$\w]*)\(\s*\)\s*\)\.requirements\?\.featureRequirements\?\.fast_mode\s*===\s*!1\s*\)\s*return\s+null/g,
+        "",
+        "service tier request sanitizer",
+      );
+    }
+    if (
       source.includes("Failed to read service tier for request") &&
       source.includes("featureRequirements?.fast_mode")
     ) {
       patched = replaceUniqueRendererGate(
         patched,
-        /if\s*\(\s*([$A-Z_a-z][$\w]*)\s*!==\s*`chatgpt`\s*\)\s*return\s*!1/g,
-        (_match, authMethodName) =>
-          `if(${authMethodName}!==\`chatgpt\`)return!0`,
-        "service tier request",
+        /async\s+function\s+([$A-Z_a-z][$\w]*)\(\s*([$A-Z_a-z][$\w]*)\s*,\s*([$A-Z_a-z][$\w]*)\s*\)\s*\{\s*let\s+([$A-Z_a-z][$\w]*)\s*=\s*await\s+[$A-Z_a-z][$\w]*\(\s*\2\s*,\s*\3\s*\)\s*;\s*if\s*\(\s*\4\s*!==\s*`chatgpt`\s*\)\s*return\s*!1\s*;[\s\S]{0,768}?\.requirements\?\.featureRequirements\?\.fast_mode\s*!==\s*!1\s*\}/g,
+        (_match, functionName, firstArgumentName, secondArgumentName) =>
+          `async function ${functionName}(${firstArgumentName},${secondArgumentName}){return!0}`,
+        "service tier request entitlement",
       );
     }
     if (
@@ -1435,7 +1511,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v18";
+  return "codey-startup-patch-installed-v19";
 })()
 "#;
 
@@ -1665,7 +1741,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v18");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v19");
     }
 
     #[test]

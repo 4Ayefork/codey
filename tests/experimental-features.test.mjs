@@ -90,7 +90,7 @@ test("user feature settings persist, require restart, and override official valu
     /\.\.\.\$\{JSON\.stringify\(experimentalFeatureOverrides\)\}/,
   );
   assert.match(patch, /__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__/);
-  assert.match(patch, /codey-startup-patch-installed-v18/);
+  assert.match(patch, /codey-startup-patch-installed-v19/);
 });
 
 test("official synchronization reads raw Statsig gates and applies the official layer", async () => {
