@@ -1052,6 +1052,8 @@ fn write_codex_live_atomic(
     std::fs::create_dir_all(home)?;
     let config_path = home.join("config.toml");
     let auth_path = home.join("auth.json");
+    #[cfg(not(windows))]
+    let _ = preserve_computer_use_guard;
     #[cfg(windows)]
     let guarded_config_text = match config_text {
         Some(config_text) if preserve_computer_use_guard => {
@@ -1392,6 +1394,7 @@ fn validate_toml_config(config_text: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn normalize_config_text_for_write(config_text: &str) -> String {
     config_text.trim_start_matches('\u{feff}').to_string()
 }

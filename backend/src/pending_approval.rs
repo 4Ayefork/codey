@@ -588,6 +588,7 @@ fn read_rollout_update(
     Some((state, appended))
 }
 
+#[cfg(test)]
 fn parse_rollout_events(contents: &str) -> Option<ParsedRolloutEvents> {
     let mut state = RolloutParseState::default();
     state.consume(contents);

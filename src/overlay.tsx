@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import semiStyles from "../node_modules/@douyinfe/semi-ui/dist/css/semi.min.css?inline";
+import "../node_modules/@douyinfe/semi-ui/lib/es/_base/base.css";
 import { App } from "./App";
 import appStyles from "./styles.css?inline";
 import overlayStyles from "./overlay.css?inline";
@@ -20,6 +20,7 @@ declare global {
       path: string,
       payload: unknown,
     ) => Promise<unknown>;
+    __codeyComponentStyles?: string;
     __codeySettingsOverlay?: OverlayController;
   }
 }
@@ -32,13 +33,15 @@ window.__codeyInvokeApi = async (command, args) => {
 };
 
 if (!window.__codeySettingsOverlay) {
+  const componentStyles = window.__codeyComponentStyles ?? "";
+  delete window.__codeyComponentStyles;
   const host = document.createElement("div");
   host.id = "codey-settings-overlay-host";
   host.style.display = "none";
   host.setAttribute("aria-hidden", "true");
   const shadow = host.attachShadow({ mode: "open" });
   const style = document.createElement("style");
-  style.textContent = `${semiStyles}\n${overlayStyles}\n${appStyles}`;
+  style.textContent = `${componentStyles}\n${overlayStyles}\n${appStyles}`;
   const backdrop = document.createElement("div");
   backdrop.className = "codey-overlay-backdrop";
   const dialog = document.createElement("section");

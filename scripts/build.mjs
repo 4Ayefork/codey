@@ -5,12 +5,6 @@ import { spawnSync } from "node:child_process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const web = spawnSync(
-  process.execPath,
-  [join(root, "scripts", "build-web.mjs")],
-  { cwd: root, stdio: "inherit" },
-);
-if (web.status !== 0) process.exit(web.status ?? 1);
 
 const cargo = spawnSync(
   "cargo",

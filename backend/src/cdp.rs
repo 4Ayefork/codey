@@ -25,6 +25,7 @@ const VOICE_CONTROL_SHIELD_SCRIPT: &str = include_str!("../../public/voice-contr
 const SECURITY_WARNING_SHIELD_SCRIPT: &str =
     include_str!("../../public/security-warning-shield.js");
 const SETTINGS_OVERLAY_SCRIPT: &str = include_str!("../../dist-overlay/codey-overlay.js");
+const SETTINGS_OVERLAY_STYLES: &str = include_str!("../../dist-overlay/codey.css");
 const PLUGIN_MARKETPLACE_FIX_SCRIPT: &str = include_str!("../../public/plugin-marketplace-fix.js");
 const MAX_INJECTION_ERROR_CHARS: usize = 500;
 static SETTINGS_OVERLAY_LOAD_SCRIPT: OnceLock<Arc<str>> = OnceLock::new();
@@ -794,7 +795,12 @@ fn with_lazy_loaders(handler: BridgeHandler, websocket_url: Arc<str>) -> BridgeH
 
 fn prepared_settings_overlay_load_script() -> Arc<str> {
     SETTINGS_OVERLAY_LOAD_SCRIPT
-        .get_or_init(|| Arc::from(settings_overlay_load_script(SETTINGS_OVERLAY_SCRIPT)))
+        .get_or_init(|| {
+            Arc::from(settings_overlay_load_script(
+                SETTINGS_OVERLAY_SCRIPT,
+                SETTINGS_OVERLAY_STYLES,
+            ))
+        })
         .clone()
 }
 
@@ -860,8 +866,9 @@ fn lazy_settings_overlay_loader_script() -> &'static str {
 })()"#
 }
 
-fn settings_overlay_load_script(script: &str) -> String {
+fn settings_overlay_load_script(script: &str, styles: &str) -> String {
     let wrapped = wrap_settings_overlay(script);
+    let styles = serde_json::to_string(styles).expect("serialize settings overlay styles");
     format!(
         r#"(() => {{
   const current = window.__codeySettingsOverlay;
@@ -869,10 +876,12 @@ fn settings_overlay_load_script(script: &str) -> String {
     return "";
   }}
   if (current?.__codeyLazyLoader) delete window.__codeySettingsOverlay;
+  window.__codeyComponentStyles = {styles};
   {wrapped}
   const ready = typeof window.__codeySettingsOverlay === "object"
     && typeof window.__codeySettingsOverlay.toggle === "function"
     && !window.__codeySettingsOverlay.__codeyLazyLoader;
+  delete window.__codeyComponentStyles;
   if (ready) return "";
   if (current?.__codeyLazyLoader) window.__codeySettingsOverlay = current;
   return String(window.__codeyOverlayError || "未生成浮层控制器");
@@ -1072,6 +1081,9 @@ mod tests {
         assert!(!snapshot_script.contains("user-script-1\": () =>"));
         let overlay_load_script = prepared_settings_overlay_load_script();
         assert!(overlay_load_script.contains("codey-settings-overlay-host"));
+        assert!(overlay_load_script.contains("window.__codeyComponentStyles = "));
+        assert!(overlay_load_script.contains(".semi-button"));
+        assert!(overlay_load_script.contains("--semi-color-primary:"));
         assert!(overlay_load_script.contains("delete window.__codeySettingsOverlay"));
         assert!(
             overlay_load_script.contains("window.__codeySettingsOverlay = current"),
@@ -1136,7 +1148,10 @@ mod tests {
 
     #[test]
     fn failed_settings_overlay_bundle_restores_the_lazy_loader() {
-        let script = settings_overlay_load_script("throw new Error('bundle failed');");
+        let script = settings_overlay_load_script(
+            "throw new Error('bundle failed');",
+            ".semi-button { color: red; }",
+        );
 
         let delete_index = script
             .find("delete window.__codeySettingsOverlay")
@@ -1147,5 +1162,6 @@ mod tests {
 
         assert!(restore_index > delete_index);
         assert!(script.contains("if (ready) return \"\""));
+        assert!(script.contains("delete window.__codeyComponentStyles"));
     }
 }

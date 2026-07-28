@@ -26,6 +26,7 @@ export default defineConfig({
       name: "CodeySettingsOverlay",
       formats: ["iife"],
       fileName: () => "codey-overlay.js",
+      cssFileName: "codey",
     },
     rollupOptions: {
       output: {

@@ -21,6 +21,7 @@ const POST_LAUNCH_COMPUTER_USE_GUARD_SECONDS: &[u64] = &[0, 5, 15, 30, 60, 120, 
 #[cfg_attr(not(windows), allow(dead_code))]
 const POST_LAUNCH_COMPUTER_USE_GUARD_STABLE_ATTEMPTS: usize = 3;
 static PET_OVERLAY_SYNC_FAILED: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
 static PET_CURSOR_DRIVER_FAILED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1867,6 +1868,7 @@ async fn try_inject(debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 async fn confirmed_pet_overlay_targets(
     debug_port: u16,
 ) -> anyhow::Result<Vec<crate::cdp::CdpTarget>> {

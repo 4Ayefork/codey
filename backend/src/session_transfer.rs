@@ -76,16 +76,6 @@ struct SessionBundle {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionExportResult {
-    pub status: &'static str,
-    pub session_id: String,
-    pub filename: String,
-    pub data: String,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SessionImportResult {
     pub status: &'static str,
     pub session_id: String,
@@ -139,28 +129,6 @@ struct SessionExportSource {
     filename: String,
     thread: Map<String, Value>,
     rollout_path: PathBuf,
-}
-
-pub fn export_session(home: &Path, session_id: &str) -> Result<SessionExportResult> {
-    let source = session_export_source(home, session_id)?;
-    let source_bytes = rollout_transfer_size(&source.rollout_path)?;
-    let capacity = usize::try_from(source_bytes)
-        .unwrap_or_default()
-        .saturating_add(4096)
-        .min(SESSION_TRANSFER_MAX_BYTES as usize);
-    let mut output = Vec::with_capacity(capacity);
-    {
-        let mut writer = LimitedWriter::new(&mut output, SESSION_TRANSFER_MAX_BYTES);
-        write_session_bundle(&mut writer, &source.thread, &source.rollout_path)?;
-    }
-    let data = String::from_utf8(output).context("序列化会话数据失败")?;
-    Ok(SessionExportResult {
-        status: "exported",
-        session_id: source.session_id,
-        filename: source.filename.clone(),
-        data,
-        message: format!("已导出会话：{}", source.filename),
-    })
 }
 
 pub fn start_export_transfer(home: &Path, session_id: &str) -> Result<SessionExportStartResult> {
@@ -379,15 +347,6 @@ fn session_export_source(home: &Path, session_id: &str) -> Result<SessionExportS
         thread,
         rollout_path,
     })
-}
-
-pub fn import_session(home: &Path, project_path: &str, data: &str) -> Result<SessionImportResult> {
-    if data.len() as u64 > SESSION_TRANSFER_MAX_BYTES {
-        anyhow::bail!("会话导入文件超过大小限制");
-    }
-    let bundle: SessionBundle =
-        serde_json::from_str(data).context("数据文件不是有效的 Codey 会话 JSON")?;
-    import_session_bundle(home, project_path, bundle)
 }
 
 fn import_session_bundle(
@@ -1053,6 +1012,7 @@ fn timestamp_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use rusqlite::params;
     use tempfile::tempdir;
 
@@ -1107,6 +1067,38 @@ mod tests {
         db_path
     }
 
+    fn export_via_chunks(home: &Path, session_id: &str) -> (SessionExportStartResult, Vec<u8>) {
+        let export = start_export_transfer(home, session_id).unwrap();
+        let mut data = Vec::with_capacity(usize::try_from(export.size).unwrap());
+        let mut offset = 0;
+        while offset < export.size {
+            let chunk = read_export_transfer_chunk(home, &export.transfer_id, offset).unwrap();
+            assert_eq!(chunk.offset, offset);
+            data.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&chunk.data)
+                    .unwrap(),
+            );
+            offset = chunk.next_offset;
+            assert_eq!(chunk.done, offset == export.size);
+        }
+        finish_export_transfer(home, &export.transfer_id).unwrap();
+        assert_eq!(data.len() as u64, export.size);
+        (export, data)
+    }
+
+    fn import_via_chunks(home: &Path, project_path: &str, data: &[u8]) -> SessionImportResult {
+        let import = start_import_transfer(home).unwrap();
+        let mut offset = 0;
+        for chunk in data.chunks(SESSION_TRANSFER_CHUNK_BYTES) {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(chunk);
+            let progress =
+                append_import_transfer_chunk(home, &import.transfer_id, offset, &encoded).unwrap();
+            offset = progress.next_offset;
+        }
+        finish_import_transfer(home, project_path, &import.transfer_id).unwrap()
+    }
+
     #[test]
     fn exports_and_imports_a_portable_session_bundle() {
         let source = tempdir().unwrap();
@@ -1118,8 +1110,8 @@ mod tests {
             source_project.path(),
             "可移植会话",
         );
-        let exported = export_session(source.path(), source_id).unwrap();
-        assert_eq!(exported.status, "exported");
+        let (exported, data) = export_via_chunks(source.path(), source_id);
+        assert_eq!(exported.status, "ready");
         assert!(exported.filename.starts_with("Codey会话-"));
         assert!(exported.filename.ends_with(".codey-session.json"));
 
@@ -1132,12 +1124,11 @@ mod tests {
             "已有会话",
         );
         let imported_project = tempdir().unwrap();
-        let imported = import_session(
+        let imported = import_via_chunks(
             target.path(),
             imported_project.path().to_str().unwrap(),
-            &exported.data,
-        )
-        .unwrap();
+            &data,
+        );
         assert_eq!(imported.session_id, source_id);
         assert!(!imported.duplicated);
 
@@ -1175,13 +1166,8 @@ mod tests {
         let project = tempdir().unwrap();
         let session_id = "01900000-0000-7000-8000-000000000003";
         create_thread_db(home.path(), session_id, project.path(), "重复会话");
-        let exported = export_session(home.path(), session_id).unwrap();
-        let imported = import_session(
-            home.path(),
-            project.path().to_str().unwrap(),
-            &exported.data,
-        )
-        .unwrap();
+        let (_, data) = export_via_chunks(home.path(), session_id);
+        let imported = import_via_chunks(home.path(), project.path().to_str().unwrap(), &data);
         assert!(imported.duplicated);
         assert_ne!(imported.session_id, session_id);
         let db = Connection::open(home.path().join("state_5.sqlite")).unwrap();
@@ -1214,14 +1200,14 @@ mod tests {
             source_project.path(),
             "待导入会话",
         );
-        let exported = export_session(source.path(), source_id).unwrap();
+        let (_, data) = export_via_chunks(source.path(), source_id);
 
         let target = tempdir().unwrap();
         let seed_project = tempdir().unwrap();
         let target_id = "01900000-0000-7000-8000-000000000005";
         create_thread_db(target.path(), target_id, seed_project.path(), "已有任务");
 
-        let imported = import_session(target.path(), "", &exported.data).unwrap();
+        let imported = import_via_chunks(target.path(), "", &data);
         assert_eq!(
             PathBuf::from(&imported.project_path),
             source_project.path().canonicalize().unwrap()

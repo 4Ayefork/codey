@@ -11,7 +11,7 @@
     "release": "node scripts/release.mjs",
     "test:js": "node --test tests/*.test.mjs",
     "vite:dev": "vite --host 127.0.0.1 --port 1421",
-    "vite:build": "node scripts/build-web.mjs"
+    "vite:build": "node scripts/build-overlay.mjs"
   },
   "dependencies": {
     "@douyinfe/semi-ui": "2.101.1",

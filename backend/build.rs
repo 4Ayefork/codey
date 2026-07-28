@@ -4,13 +4,12 @@ use std::process::Command;
 fn main() {
     for path in [
         "../src",
-        "../index.html",
-        "../vite.config.ts",
         "../vite.overlay.config.ts",
         "../package.json",
+        "../pnpm-lock.yaml",
         "../public",
         "icons/Codey.ico",
-        "../scripts/build-web.mjs",
+        "../scripts/build-overlay.mjs",
     ] {
         println!("cargo:rerun-if-changed={path}");
     }

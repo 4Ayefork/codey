@@ -603,14 +603,6 @@ impl AppState {
                     .await
                     .unwrap_or_else(api_error_message)
             }
-            "/session/export" => {
-                let session_id = bridge_string(&payload, "sessionId");
-                let home = codex_home();
-                blocking_value("导出会话", move || {
-                    session_transfer::export_session(&home, &session_id)
-                })
-                .await
-            }
             "/session/export/start" => {
                 let session_id = bridge_string(&payload, "sessionId");
                 let home = codex_home();
@@ -636,15 +628,6 @@ impl AppState {
                 blocking_value("清理会话导出", move || {
                     session_transfer::finish_export_transfer(&home, &transfer_id)?;
                     Ok(json!({"status": "ok"}))
-                })
-                .await
-            }
-            "/session/import" => {
-                let project_path = bridge_string(&payload, "projectPath");
-                let data = bridge_string(&payload, "data");
-                let home = codex_home();
-                blocking_value("导入会话", move || {
-                    session_transfer::import_session(&home, &project_path, &data)
                 })
                 .await
             }
@@ -779,52 +762,6 @@ pub async fn invoke_api(state: &Arc<AppState>, command: &str, args: Value) -> Va
             Ok(file_path) => install_downloaded_update(state, file_path).await,
             Err(error) => Err(error),
         },
-        "export_session" => match string_argument(&args, "sessionId") {
-            Ok(session_id) => {
-                let home = codex_home();
-                blocking_result("导出会话", move || {
-                    session_transfer::export_session(&home, &session_id)
-                })
-                .await
-            }
-            Err(error) => Err(error),
-        },
-        "import_session" => {
-            let project_path = string_argument(&args, "projectPath");
-            let data = string_argument(&args, "data");
-            match (project_path, data) {
-                (Ok(project_path), Ok(data)) => {
-                    let home = codex_home();
-                    blocking_result("导入会话", move || {
-                        session_transfer::import_session(&home, &project_path, &data)
-                    })
-                    .await
-                }
-                (Err(error), _) | (_, Err(error)) => Err(error),
-            }
-        }
-        "delete_session" => {
-            let session_id = string_argument(&args, "sessionId");
-            let title = args
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            match session_id {
-                Ok(session_id) => delete_session_record(state, session_id, title).await,
-                Err(error) => Err(error),
-            }
-        }
-        "delete_selected_messages" => {
-            let session_id = string_argument(&args, "sessionId");
-            let message_ids = argument::<Vec<String>>(&args, "messageIds");
-            match (session_id, message_ids) {
-                (Ok(session_id), Ok(message_ids)) => {
-                    delete_selected_messages(state, session_id, message_ids).await
-                }
-                (Err(error), _) | (_, Err(error)) => Err(error),
-            }
-        }
         "plugin_marketplace_status" => plugin_marketplace_status().await,
         "repair_plugin_marketplace" => repair_plugin_marketplace().await,
         _ => Err(format!("未知 Codey API 命令：{command}")),
@@ -2775,27 +2712,6 @@ where
         Ok(Ok(result)) => result,
         Ok(Err(error)) => api_error_message(error),
         Err(error) => api_error_message(format!("{operation}任务异常退出：{error}")),
-    }
-}
-
-async fn blocking_result<T, F>(operation: &str, task: F) -> Result<Value, String>
-where
-    T: Serialize + Send + 'static,
-    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
-{
-    let operation = operation.to_string();
-    let task_operation = operation.clone();
-    match tokio::task::spawn_blocking(move || {
-        task().and_then(|result| {
-            serde_json::to_value(result)
-                .map_err(|error| anyhow::anyhow!("{task_operation}结果序列化失败：{error}"))
-        })
-    })
-    .await
-    {
-        Ok(Ok(result)) => Ok(result),
-        Ok(Err(error)) => Err(error.to_string()),
-        Err(error) => Err(format!("{operation}任务异常退出：{error}")),
     }
 }
 
