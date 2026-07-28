@@ -1,14 +1,9 @@
-import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
-  },
+  publicDir: false,
   // The overlay is evaluated directly inside Codex's renderer instead of
   // being loaded by a normal Vite HTML entry. Replace React's CommonJS
   // environment check explicitly so the IIFE never expects Node's `process`

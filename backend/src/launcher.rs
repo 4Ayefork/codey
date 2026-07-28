@@ -30,6 +30,7 @@ use crate::plugin_marketplace;
 use crate::provider_lease;
 use crate::session_index_cleanup::{self, SessionIndexCleanupReport};
 use crate::startup_maintenance::{self, ProviderSyncPlan};
+use crate::startup_progress::StartupProgress;
 use crate::trace_log_guard;
 
 const CDP_WATCHDOG_INTERVAL: Duration = Duration::from_secs(30);
@@ -130,7 +131,13 @@ impl CodeyRuntime {
     pub async fn start(
         config: &CodeyConfig,
         handler: codey_runtime_core::bridge::BridgeHandler,
+        startup_progress: &StartupProgress,
     ) -> Result<(Self, oneshot::Receiver<()>)> {
+        startup_progress.start_step(
+            "prepare_injection_bundle",
+            "准备注入脚本",
+            "构建 bridge、设置入口与运行时保护脚本",
+        );
         let home = codex_home();
         let injection_scripts = cdp::prepare_injection_scripts(
             config.fast_codex_startup,
@@ -139,17 +146,28 @@ impl CodeyRuntime {
             config.hide_full_access_warning,
             &config.user_scripts,
         );
+        let original_provider = ensure_global_model_provider(&home)?;
+        startup_progress.finish_step("prepare_injection_bundle", "bridge 与注入脚本包已准备");
+        startup_progress.start_step(
+            "trace_log_guard",
+            "配置 Trace 写盘防护",
+            "检查并更新现有 logs_*.sqlite",
+        );
         let trace_guard_home = home.clone();
         let disable_trace_log_writes = config.disable_trace_log_writes;
         let initial_trace_guard = tokio::task::spawn_blocking(move || {
             trace_log_guard::configure(&trace_guard_home, disable_trace_log_writes)
         });
-        let original_provider = ensure_global_model_provider(&home)?;
 
         // Permanent maintenance runs before Codey creates the temporary
         // direct-provider lease. A lightweight header/SQLite validation normally
         // reuses the last successful provider sync; provider changes still
         // fall back to the complete rollout and SQLite repair.
+        startup_progress.start_step(
+            "repair_sessions",
+            "校验并修复会话数据",
+            "检查 rollout、SQLite 与 session_index.jsonl",
+        );
         let maintenance_home = home.clone();
         match maintenance_lock::recover_stale_locks(&maintenance_home) {
             Ok(recovered) => {
@@ -192,10 +210,28 @@ impl CodeyRuntime {
         .context("启动前会话修复任务异常退出")?;
         let (session_status, session_detail, session_threads) =
             session_maintenance_summary(&provider_sync, &index_cleanup);
+        if session_status == "error" {
+            startup_progress.warn_step("repair_sessions", session_detail.clone());
+        } else {
+            startup_progress.finish_step("repair_sessions", session_detail.clone());
+        }
         initial_trace_guard
             .await
             .context("Trace 日志保护切换任务异常退出")??;
+        startup_progress.finish_step(
+            "trace_log_guard",
+            if disable_trace_log_writes {
+                "Trace 写盘防护已启用"
+            } else {
+                "Trace 写盘防护已关闭"
+            },
+        );
 
+        startup_progress.start_step(
+            "resolve_codex_app",
+            "定位 Codex 桌面应用",
+            "解析已保存路径与平台默认安装位置",
+        );
         let configured_app_path = config.codex_app_path.trim();
         let app_dir = resolve_codex_app_dir_with_saved(
             (!configured_app_path.is_empty())
@@ -210,7 +246,22 @@ impl CodeyRuntime {
                 anyhow::anyhow!(CODEX_APP_PATH_INVALID_ERROR)
             }
         })?;
+        startup_progress.finish_step(
+            "resolve_codex_app",
+            format!("Codex 路径：{}", app_dir.display()),
+        );
+        startup_progress.start_step(
+            "check_existing_codex",
+            "检查现有 Codex 进程",
+            "Windows 启动补丁要求完全退出旧实例",
+        );
         prepare_codex_for_launch(&app_dir).await?;
+        startup_progress.finish_step("check_existing_codex", "没有冲突的 Codex 实例");
+        startup_progress.start_step(
+            "apply_provider_config",
+            "应用线路与模型配置",
+            "刷新模型目录并创建本次运行的临时配置租约",
+        );
         let current_profile = config
             .active_profile()
             .ok_or_else(|| anyhow::anyhow!("找不到当前 Codex 线路"))?;
@@ -249,7 +300,16 @@ impl CodeyRuntime {
             config.fast_context_tools,
             config.subagent_optimization,
         )?;
+        startup_progress.finish_step(
+            "apply_provider_config",
+            format!("已应用线路「{}」", current_profile.name),
+        );
 
+        startup_progress.start_step(
+            "check_local_patches",
+            "检查插件与本地补丁",
+            "并行检查插件市场和宠物精简配置",
+        );
         let marketplace_home = home.clone();
         let marketplace_task = tokio::task::spawn_blocking(move || {
             plugin_marketplace::marketplaces_status(&marketplace_home)
@@ -297,6 +357,14 @@ impl CodeyRuntime {
                 ));
             }
         };
+        startup_progress.finish_step(
+            "check_local_patches",
+            if plugin_status == "ready" {
+                "插件市场与本地补丁状态正常"
+            } else {
+                "本地补丁已完成，插件市场需要后续修复"
+            },
+        );
         let spawned = match spawn_codex(
             &app_dir,
             debug_port,
@@ -305,6 +373,7 @@ impl CodeyRuntime {
             config.fast_codex_startup,
             config.experimental_features,
             config.gpu_launch_mode,
+            startup_progress,
         )
         .await
         {
@@ -325,12 +394,18 @@ impl CodeyRuntime {
         #[cfg(target_os = "macos")]
         let inspector_argument = spawned.inspector_argument.clone();
         let child = Arc::new(Mutex::new(spawned.child));
+        startup_progress.start_step(
+            "inject_cdp_bridge",
+            "连接页面并注入 Codey",
+            "等待 Codex Renderer 就绪，最多重试 30 次",
+        );
         let injected_target =
             match cdp::retry_inject_with_scripts(debug_port, handler.clone(), &injection_scripts)
                 .await
             {
                 Ok(target) => target,
                 Err(error) => {
+                    startup_progress.fail_step("inject_cdp_bridge", format!("{error:#}"));
                     #[cfg(windows)]
                     if let Err(stop_error) =
                         terminate_windows_codex_processes(&app_dir, spawned.process_id).await
@@ -372,6 +447,10 @@ impl CodeyRuntime {
                     return Err(restore_runtime_config_after_error(&home, error));
                 }
             };
+        startup_progress.finish_step(
+            "inject_cdp_bridge",
+            "Codey bridge、设置入口与脚本状态已注入",
+        );
 
         let injection_statuses = Arc::new(RwLock::new(injected_target.injection_statuses()));
         let experimental_feature_runtime = Arc::new(RwLock::new(
@@ -740,6 +819,7 @@ async fn spawn_codex(
     fast_codex_startup: bool,
     experimental_features: ExperimentalFeaturesConfig,
     gpu_launch_mode: GpuLaunchMode,
+    startup_progress: &StartupProgress,
 ) -> Result<SpawnedCodex> {
     let patch_options = crate::codex_startup_patch::PatchOptions {
         disable_pet: disable_codex_pet,
@@ -751,19 +831,38 @@ async fn spawn_codex(
 
     #[cfg(windows)]
     {
+        startup_progress.start_step(
+            "spawn_codex",
+            "拉起 Codex 进程",
+            "通过 Windows 应用激活器或桌面可执行文件启动",
+        );
         let inspector_port = crate::codex_startup_patch::reserve_loopback_port()
             .context("为 Codex 启动补丁选择本地调试端口失败")?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
         let mut launch_arguments = vec![inspector_arg];
         launch_arguments.extend(runtime_arguments);
         let mut spawned = spawn_windows_codex(app_dir, debug_port, &launch_arguments).await?;
+        startup_progress.finish_step(
+            "spawn_codex",
+            spawned
+                .process_id
+                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
+                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
+        );
+        startup_progress.start_step(
+            "install_startup_patch",
+            "安装 Windows 启动补丁",
+            "等待本地 Inspector 并应用慢启动、WMI 与资源保护",
+        );
         match crate::codex_startup_patch::install(inspector_port, patch_options).await {
             Ok(()) => {
+                startup_progress.finish_step("install_startup_patch", "Windows 启动补丁已安装");
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
                 return Ok(spawned);
             }
             Err(error) => {
+                startup_progress.fail_step("install_startup_patch", format!("{error:#}"));
                 stop_windows_spawned_codex(&mut spawned).await;
                 return Err(error)
                     .context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI");
@@ -773,6 +872,11 @@ async fn spawn_codex(
 
     #[cfg(target_os = "macos")]
     {
+        startup_progress.start_step(
+            "spawn_codex",
+            "拉起 Codex 进程",
+            "启动独立的 Codex 桌面应用实例",
+        );
         let inspector_port = crate::codex_startup_patch::reserve_loopback_port()
             .context("为 macOS Codex 启动补丁选择本地调试端口失败")?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
@@ -785,13 +889,27 @@ async fn spawn_codex(
         };
         let mut spawned = spawn_command(command)?;
         spawned.inspector_argument = Some(inspector_arg.clone());
+        startup_progress.finish_step(
+            "spawn_codex",
+            spawned
+                .process_id
+                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
+                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
+        );
+        startup_progress.start_step(
+            "install_startup_patch",
+            "安装 macOS 启动补丁",
+            "等待本地 Inspector 并应用慢启动与资源保护",
+        );
         match crate::codex_startup_patch::install(inspector_port, patch_options).await {
             Ok(()) => {
+                startup_progress.finish_step("install_startup_patch", "macOS 启动补丁已安装");
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
                 return Ok(spawned);
             }
             Err(error) => {
+                startup_progress.fail_step("install_startup_patch", format!("{error:#}"));
                 if let Err(stop_error) = stop_macos_codex(
                     &inspector_arg,
                     app_dir,
@@ -818,8 +936,16 @@ async fn spawn_codex(
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
+        startup_progress.start_step("spawn_codex", "拉起 Codex 进程", "启动 Codex 桌面应用");
         let command = build_codex_command(app_dir, debug_port, &runtime_arguments);
         let mut spawned = spawn_command(command)?;
+        startup_progress.finish_step(
+            "spawn_codex",
+            spawned
+                .process_id
+                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
+                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
+        );
         spawned.performance_status = "ready".to_string();
         spawned.performance_detail = if disable_codex_pet {
             "当前平台不支持宠物硬屏蔽启动补丁".to_string()

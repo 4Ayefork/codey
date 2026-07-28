@@ -86,6 +86,7 @@ test("renderer core defaults Codex locale to Chinese before remote config settle
   assert.match(inject, /Object\.defineProperty\(window, "__STATSIG__"/);
   assert.match(inject, /patchStatsigClients\(\)/);
   assert.match(inject, /scanStatsigUntilReady/);
+  assert.match(inject, /elapsed < 1000 \? 50 : 250/);
   assert.match(inject, /const retryDelays = \[0, 250, 750, 1500, 3000, 5000\]/);
   assert.match(inject, /verification\?\.value !== defaultChineseLocale/);
   assert.match(inject, /existing\.ensureSynced\?\.\(\)/);

@@ -12,7 +12,6 @@ import {
   IconCheck,
   IconCircleCheck as CircleCheck,
   IconDeviceFloppy as Save,
-  IconGitBranch as GitBranch,
   IconLoader2 as LoaderCircle,
   IconX,
 } from "@tabler/icons-react";
@@ -46,11 +45,14 @@ import type {
   Notice,
   PluginMarketplaceStatus,
   RuntimeStatus,
+  StartupLoadingStep,
+  StartupProgress,
   TraceLogCleanup,
   UpdateCheck,
   UpdateDownload,
 } from "./App.types";
 import { Badge, Button, Button as SaveButton } from "./components/semi";
+import { StartupLoading } from "./StartupLoading";
 
 const Check = IconCheck;
 const X = IconX;
@@ -59,6 +61,56 @@ const SETTINGS_OPENED_EVENT = "codey-settings-opened";
 const UPDATE_AVAILABLE_EVENT = "codey-update-availability-changed";
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 12_000;
+const STARTUP_PROGRESS_TIMEOUT_MS = 3_000;
+const STARTUP_CONFIG_TIMEOUT_MS = 10_000;
+const STARTUP_RUNTIME_TIMEOUT_MS = 15_000;
+const STARTUP_PLUGIN_TIMEOUT_MS = 10_000;
+
+type InitialLoadStatus = "loading" | "ready" | "error";
+
+type InitialConfigResult = {
+  config: Config;
+  modelState?: ModelState;
+  startupError?: string;
+  codexAppPathSelectionRequired?: boolean;
+  ccSwitch?: CcSwitchStatus;
+  startupProgress?: StartupProgress;
+};
+
+function createFrontendStartupSteps(): StartupLoadingStep[] {
+  return [
+    {
+      id: "read_startup_trace",
+      label: "读取启动记录",
+      status: "pending",
+      detail: "汇总 Codex 后端启动阶段",
+    },
+    {
+      id: "load_config",
+      label: "读取设置与线路",
+      status: "pending",
+      detail: "加载配置、当前线路和模型目录",
+    },
+    {
+      id: "refresh_runtime",
+      label: "检查 Codex 运行时",
+      status: "pending",
+      detail: "确认 bridge 与注入脚本状态",
+    },
+    {
+      id: "check_plugins",
+      label: "检查插件市场",
+      status: "pending",
+      detail: "读取插件注册与修复状态",
+    },
+    {
+      id: "finalize_panel",
+      label: "准备设置面板",
+      status: "pending",
+      detail: "应用启动结果",
+    },
+  ];
+}
 
 declare global {
   interface Window {
@@ -178,6 +230,14 @@ export function App({ embedded = false, onClose }: AppProps) {
     tone: "info",
     text: "正在连接 Codey…",
   });
+  const [initialLoadStatus, setInitialLoadStatus] =
+    useState<InitialLoadStatus>("loading");
+  const [initialLoadError, setInitialLoadError] = useState("");
+  const [startupProgress, setStartupProgress] =
+    useState<StartupProgress | null>(null);
+  const [frontendStartupSteps, setFrontendStartupSteps] = useState<
+    StartupLoadingStep[]
+  >(createFrontendStartupSteps);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [webhookResult, setWebhookResult] = useState<InlineResult>({
@@ -204,6 +264,8 @@ export function App({ embedded = false, onClose }: AppProps) {
   const settingsOpenRefreshRequestedRef = useRef(false);
   const updateCheckRef = useRef<UpdateCheck | null>(null);
   const autoUpdateCheckInFlightRef = useRef(false);
+  const initialLoadStartedRef = useRef(false);
+  const startupAttemptRef = useRef(0);
 
   const provider = ccSwitchStatus?.provider;
   const officialSlugs = useMemo(
@@ -283,6 +345,8 @@ export function App({ embedded = false, onClose }: AppProps) {
   }, []);
 
   useEffect(() => {
+    if (initialLoadStartedRef.current) return;
+    initialLoadStartedRef.current = true;
     void load();
   }, []);
 
@@ -390,58 +454,278 @@ export function App({ embedded = false, onClose }: AppProps) {
     };
   }, [status.restartInProgress]);
 
+  function updateFrontendStartupStep(
+    attempt: number,
+    id: string,
+    status: StartupLoadingStep["status"],
+    detail?: string,
+  ) {
+    if (startupAttemptRef.current !== attempt) return;
+    const changedAtMs = Date.now();
+    setFrontendStartupSteps((current) => {
+      if (startupAttemptRef.current !== attempt) return current;
+      return current.map((step) => {
+        if (step.id !== id) return step;
+        if (status === "running") {
+          return {
+            ...step,
+            status,
+            detail: detail ?? step.detail,
+            startedAtMs: changedAtMs,
+            finishedAtMs: undefined,
+            durationMs: undefined,
+          };
+        }
+        return {
+          ...step,
+          status,
+          detail: detail ?? step.detail,
+          finishedAtMs: changedAtMs,
+          durationMs: step.startedAtMs
+            ? changedAtMs - step.startedAtMs
+            : undefined,
+        };
+      });
+    });
+  }
+
+  function failInitialLoad(attempt: number, error: unknown) {
+    if (startupAttemptRef.current !== attempt) return;
+    const message = errorText(error);
+    setInitialLoadError(message);
+    setInitialLoadStatus("error");
+    setNotice({ tone: "error", text: message });
+  }
+
   async function load() {
+    const attempt = startupAttemptRef.current + 1;
+    startupAttemptRef.current = attempt;
+    const isCurrentAttempt = () => startupAttemptRef.current === attempt;
+    setInitialLoadStatus("loading");
+    setInitialLoadError("");
+    setFrontendStartupSteps(createFrontendStartupSteps());
+
+    updateFrontendStartupStep(
+      attempt,
+      "read_startup_trace",
+      "running",
+      "正在读取后端记录",
+    );
     try {
-      const result = await invoke<{
-        config: Config;
-        modelState?: ModelState;
-        startupError?: string;
-        codexAppPathSelectionRequired?: boolean;
-        ccSwitch?: CcSwitchStatus;
-      }>("load_codey_config");
+      const progress = await withTimeout(
+        invoke<StartupProgress>("startup_progress"),
+        STARTUP_PROGRESS_TIMEOUT_MS,
+        "读取后端启动记录超时",
+      );
+      if (!isCurrentAttempt()) return;
+      setStartupProgress(progress);
+      updateFrontendStartupStep(
+        attempt,
+        "read_startup_trace",
+        "success",
+        `已读取 ${progress.steps.length} 个启动阶段`,
+      );
+    } catch (error) {
+      updateFrontendStartupStep(
+        attempt,
+        "read_startup_trace",
+        "warning",
+        errorText(error),
+      );
+    }
+    if (!isCurrentAttempt()) return;
+
+    updateFrontendStartupStep(
+      attempt,
+      "load_config",
+      "running",
+      "正在读取配置与当前线路",
+    );
+    let result: InitialConfigResult;
+    try {
+      result = await withTimeout(
+        invoke<InitialConfigResult>("load_codey_config"),
+        STARTUP_CONFIG_TIMEOUT_MS,
+        "读取 Codey 配置超时",
+      );
+      if (!isCurrentAttempt()) return;
       setPersistedConfig(result.config);
       setCcSwitchStatus(result.ccSwitch ?? null);
       if (result.modelState) setModelState(result.modelState);
-      const shouldRefreshInjectionStatus =
-        !embedded || !settingsOpenRefreshRequestedRef.current;
-      const [next] = await Promise.all([
-        shouldRefreshInjectionStatus
-          ? refreshInjectionStatus()
-          : refreshStatus(),
-        refreshPluginMarketplaceStatus(),
-      ]);
-      const startupError = next.startupError || result.startupError;
-      setCodexAppPathDialogVisible(
-        Boolean(result.codexAppPathSelectionRequired),
-      );
-      if (startupError) {
-        setNotice({ tone: "error", text: `自动启动失败：${startupError}` });
-      } else if (next.restartRequired) {
-        setNotice({ tone: "info", text: "已保存的配置需重启 Codex 后生效" });
-      } else {
-        setNotice({
-          tone: next.running ? "success" : "info",
-          text: next.running
-            ? "当前线路和模型目录已同步"
-            : "Codey 运行时已就绪",
-        });
+      if (result.startupProgress) setStartupProgress(result.startupProgress);
+      if (!result.ccSwitch?.provider) {
+        throw new Error("未读取到当前线路，请检查 Codey 配置");
       }
+      updateFrontendStartupStep(
+        attempt,
+        "load_config",
+        "success",
+        `当前线路：${result.ccSwitch.provider.name}`,
+      );
     } catch (error) {
-      setNotice({ tone: "error", text: errorText(error) });
+      updateFrontendStartupStep(
+        attempt,
+        "load_config",
+        "error",
+        errorText(error),
+      );
+      failInitialLoad(attempt, error);
+      return;
     }
+
+    const shouldRefreshInjectionStatus =
+      !embedded || !settingsOpenRefreshRequestedRef.current;
+    updateFrontendStartupStep(
+      attempt,
+      "refresh_runtime",
+      "running",
+      shouldRefreshInjectionStatus
+        ? "正在刷新注入状态"
+        : "正在读取运行时状态",
+    );
+    updateFrontendStartupStep(
+      attempt,
+      "check_plugins",
+      "running",
+      "正在读取插件市场状态",
+    );
+
+    const runtimeTask = (async () => {
+      try {
+        const next = await withTimeout(
+          requestRuntimeStatus(shouldRefreshInjectionStatus),
+          STARTUP_RUNTIME_TIMEOUT_MS,
+          "检查 Codex 运行时超时",
+        );
+        if (!isCurrentAttempt()) return next;
+        setStatus(next);
+        if (next.startupProgress) setStartupProgress(next.startupProgress);
+        updateFrontendStartupStep(
+          attempt,
+          "refresh_runtime",
+          "success",
+          next.running ? "Codex bridge 已连接" : "运行时状态已返回",
+        );
+        return next;
+      } catch (error) {
+        updateFrontendStartupStep(
+          attempt,
+          "refresh_runtime",
+          "error",
+          errorText(error),
+        );
+        throw error;
+      }
+    })();
+
+    const pluginTask = (async () => {
+      try {
+        const next = await withTimeout(
+          invoke<PluginMarketplaceStatus>("plugin_marketplace_status"),
+          STARTUP_PLUGIN_TIMEOUT_MS,
+          "检查插件市场超时",
+        );
+        if (!isCurrentAttempt()) return next;
+        setPluginMarketplaceStatus(next);
+        const hasWarning =
+          next.status === "error" || next.status === "needs_repair";
+        updateFrontendStartupStep(
+          attempt,
+          "check_plugins",
+          hasWarning ? "warning" : "success",
+          next.message ||
+            (hasWarning ? "插件市场需要修复" : "插件市场状态正常"),
+        );
+        return next;
+      } catch (error) {
+        if (isCurrentAttempt()) {
+          setPluginMarketplaceStatus({
+            status: "error",
+            needsRepair: true,
+            message: errorText(error),
+          });
+        }
+        updateFrontendStartupStep(
+          attempt,
+          "check_plugins",
+          "warning",
+          errorText(error),
+        );
+        return null;
+      }
+    })();
+
+    let next: RuntimeStatus;
+    try {
+      [next] = await Promise.all([runtimeTask, pluginTask]);
+      if (!isCurrentAttempt()) return;
+    } catch (error) {
+      failInitialLoad(attempt, error);
+      return;
+    }
+
+    updateFrontendStartupStep(
+      attempt,
+      "finalize_panel",
+      "running",
+      "正在应用启动结果",
+    );
+    setCodexAppPathDialogVisible(
+      Boolean(result.codexAppPathSelectionRequired),
+    );
+    const startupError = next.startupError || result.startupError;
+    if (startupError) {
+      const message = `自动启动失败：${startupError}`;
+      updateFrontendStartupStep(
+        attempt,
+        "finalize_panel",
+        "error",
+        startupError,
+      );
+      failInitialLoad(attempt, message);
+      return;
+    }
+
+    updateFrontendStartupStep(
+      attempt,
+      "finalize_panel",
+      "success",
+      "设置面板已就绪",
+    );
+    if (next.restartRequired) {
+      setNotice({ tone: "info", text: "已保存的配置需重启 Codex 后生效" });
+    } else {
+      setNotice({
+        tone: next.running ? "success" : "info",
+        text: next.running
+          ? "当前线路和模型目录已同步"
+          : "Codey 运行时已就绪",
+      });
+    }
+    setInitialLoadStatus("ready");
   }
 
   async function refreshStatus() {
-    const next = await invoke<RuntimeStatus>("runtime_status");
+    const next = await requestRuntimeStatus(false);
     setStatus(next);
     return next;
+  }
+
+  async function requestRuntimeStatus(shouldRefreshInjectionStatus: boolean) {
+    if (shouldRefreshInjectionStatus) {
+      await invoke("refresh_injection_status");
+    }
+    return invoke<RuntimeStatus>("runtime_status");
   }
 
   function refreshInjectionStatus() {
     if (injectionStatusRefreshRef.current)
       return injectionStatusRefreshRef.current;
-    const refresh = invoke("refresh_injection_status")
-      .then(() => refreshStatus())
+    const refresh = requestRuntimeStatus(true)
+      .then((next) => {
+        setStatus(next);
+        return next;
+      })
       .finally(() => {
         if (injectionStatusRefreshRef.current === refresh) {
           injectionStatusRefreshRef.current = null;
@@ -1065,23 +1349,22 @@ export function App({ embedded = false, onClose }: AppProps) {
   const handleConfirmCodexAppPath = useStableEvent(
     () => void confirmCodexAppPath(),
   );
+  const handleRetryInitialLoad = useStableEvent(() => void load());
+  const handleContinueAfterLoadError = useStableEvent(() => {
+    if (config && provider) setInitialLoadStatus("ready");
+  });
 
-  if (!config || !provider) {
+  if (initialLoadStatus !== "ready" || !config || !provider) {
     return (
-      <main className="app-shell loading-shell">
-        <div className="loading-mark">
-          <GitBranch size={17} />
-        </div>
-        <div>
-          <strong>正在载入 Codey</strong>
-          <p>{notice.text}</p>
-        </div>
-        <LoaderCircle
-          className="spinner loading-spinner"
-          size={16}
-          aria-hidden="true"
-        />
-      </main>
+      <StartupLoading
+        backendProgress={startupProgress}
+        frontendSteps={frontendStartupSteps}
+        status={initialLoadStatus === "error" ? "error" : "loading"}
+        error={initialLoadError}
+        canContinue={Boolean(config && provider)}
+        onRetry={handleRetryInitialLoad}
+        onContinue={handleContinueAfterLoadError}
+      />
     );
   }
 

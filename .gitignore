@@ -4,6 +4,7 @@
 # Rust and frontend build output
 /target/
 /target-legacy/
+/vendor/Codey/target/
 /dist/
 /dist-overlay/
 /coverage/
@@ -22,6 +23,8 @@
 *.swp
 *.swo
 *~
+__pycache__/
+*.py[cod]
 
 # IDE metadata
 /.idea/

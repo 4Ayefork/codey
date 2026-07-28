@@ -10,10 +10,12 @@ import "./styles.css";
 if (import.meta.env.DEV) {
   if (!window.__codeyInvokeApi) {
     console.log("[Dev Mode] Auto-injecting Codey Mock API");
+    const previewParams = new URLSearchParams(window.location.search);
     const previewClientPlatform =
-      new URLSearchParams(window.location.search).get("platform") === "windows"
+      previewParams.get("platform") === "windows"
         ? "windows"
         : "macos";
+    const previewStartupError = previewParams.get("startup") === "error";
     let previewConfig = {
       activeProfileId: "primary",
       profiles: [
@@ -90,18 +92,85 @@ if (import.meta.env.DEV) {
       defaultModel: "gpt-5.6-sol",
     };
     let previewTraceStats: typeof previewTraceLogStats | undefined;
+    const previewStartupStartedAt = Date.now() - 6_840;
+    const previewStartupProgress = {
+      status: "success" as const,
+      startedAtMs: previewStartupStartedAt,
+      finishedAtMs: previewStartupStartedAt + 6_840,
+      capturedAtMs: Date.now(),
+      elapsedMs: 6_840,
+      steps: [
+        {
+          id: "restore_previous_state",
+          label: "恢复上次临时配置",
+          status: "success" as const,
+          detail: "临时配置状态正常",
+          startedAtMs: previewStartupStartedAt,
+          finishedAtMs: previewStartupStartedAt + 38,
+          durationMs: 38,
+        },
+        {
+          id: "sync_current_provider",
+          label: "读取当前线路",
+          status: "success" as const,
+          detail: "当前线路：主力代理 (ChatGPT)",
+          startedAtMs: previewStartupStartedAt + 38,
+          finishedAtMs: previewStartupStartedAt + 94,
+          durationMs: 56,
+        },
+        {
+          id: "sync_provider_models",
+          label: "同步线路模型",
+          status: "warning" as const,
+          detail: "上游请求超时，已使用默认模型",
+          startedAtMs: previewStartupStartedAt + 94,
+          finishedAtMs: previewStartupStartedAt + 5_108,
+          durationMs: 5_014,
+        },
+        {
+          id: "spawn_codex",
+          label: "拉起 Codex",
+          status: "success" as const,
+          detail: "Codex 进程已创建",
+          startedAtMs: previewStartupStartedAt + 5_108,
+          finishedAtMs: previewStartupStartedAt + 5_472,
+          durationMs: 364,
+        },
+        {
+          id: "inject_cdp_bridge",
+          label: "注入 Codey bridge",
+          status: "success" as const,
+          detail: "设置面板 bridge 已连接",
+          startedAtMs: previewStartupStartedAt + 5_472,
+          finishedAtMs: previewStartupStartedAt + 6_840,
+          durationMs: 1_368,
+        },
+      ],
+    };
 
     window.__codeyInvokeApi = async (command, args) => {
       console.log(`[Mock API Call] ${command}`, args);
       // Wait a tiny bit to simulate network delay
       await new Promise((resolve) => setTimeout(resolve, 300));
 
+      if (
+        previewStartupError &&
+        (command === "startup_progress" || command === "load_codey_config")
+      ) {
+        throw new Error(
+          "Codey bridge 请求超时：Windows WebView 初始化阶段长时间没有返回，请检查 codey.log 中最后一个启动步骤",
+        );
+      }
+      if (command === "startup_progress") {
+        return previewStartupProgress;
+      }
       if (command === "load_codey_config") {
         return {
           config: previewConfig,
           modelState: previewModelState,
           startupError: undefined,
           ccSwitch: previewCcSwitch,
+          startupProgress: previewStartupProgress,
         };
       }
       if (command === "runtime_status") {
@@ -116,6 +185,7 @@ if (import.meta.env.DEV) {
             previewConfig.profiles.find(
               (p) => p.id === previewConfig.activeProfileId,
             )?.name || "未命名代理",
+          startupProgress: previewStartupProgress,
           codexAppPath: previewConfig.codexAppPath,
           maintenance: {
             sessionStatus: "ready",

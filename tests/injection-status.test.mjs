@@ -45,7 +45,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     /"refresh_injection_status"\s*=>\s*refresh_injection_status/,
   );
   assert.match(app, /invoke\("refresh_injection_status"\)/);
-  assert.equal(app.match(/invoke\("refresh_injection_status"\)/g)?.length, 1);
+  assert.match(app, /if \(shouldRefreshInjectionStatus\)/);
   assert.match(app, /codey-injection-status-changed/);
   assert.match(app, /codey-settings-opened/);
   assert.match(

@@ -7,7 +7,6 @@ fn main() {
         "../vite.overlay.config.ts",
         "../package.json",
         "../pnpm-lock.yaml",
-        "../public",
         "icons/Codey.ico",
         "../scripts/build-overlay.mjs",
     ] {

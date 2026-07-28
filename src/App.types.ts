@@ -98,6 +98,41 @@ export type RuntimeStatus = {
   injectionScripts?: InjectionScriptStatus[];
   experimentalFeatureRuntime?: ExperimentalFeatureRuntimeStatus;
   traceLogStats?: TraceLogStats;
+  startupProgress?: StartupProgress;
+};
+
+export type StartupProgressStatus = "idle" | "running" | "success" | "error";
+
+export type StartupStepStatus = "running" | "success" | "warning" | "error";
+
+export type StartupProgressStep = {
+  id: string;
+  label: string;
+  status: StartupStepStatus;
+  detail?: string;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  durationMs?: number;
+};
+
+export type StartupProgress = {
+  status: StartupProgressStatus;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  capturedAtMs: number;
+  elapsedMs: number;
+  steps: StartupProgressStep[];
+  error?: string;
+};
+
+export type StartupLoadingStep = {
+  id: string;
+  label: string;
+  status: "pending" | StartupStepStatus;
+  detail?: string;
+  startedAtMs?: number;
+  finishedAtMs?: number;
+  durationMs?: number;
 };
 
 export type PluginMarketplaceStatus = {

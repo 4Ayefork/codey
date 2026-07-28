@@ -31,6 +31,7 @@ use crate::provider_models;
 use crate::session_delete;
 use crate::session_metadata;
 use crate::session_transfer;
+use crate::startup_progress::StartupProgress;
 use crate::trace_log_guard;
 use crate::trace_log_stats::{self, TraceLogStatsHandle, TraceLogStatsSnapshot};
 use crate::webhook::{WebhookDispatcher, WebhookEvent};
@@ -43,6 +44,7 @@ pub struct AppState {
     runtime_operation: Mutex<()>,
     pub trace_log_stats: TraceLogStatsHandle,
     pub startup_error: RwLock<Option<String>>,
+    pub startup_progress: StartupProgress,
     restart_in_progress: AtomicBool,
     runtime_generation: AtomicU64,
     session_titles: RwLock<HashMap<String, String>>,
@@ -100,6 +102,7 @@ impl Default for AppState {
             runtime_operation: Mutex::new(()),
             trace_log_stats: TraceLogStatsHandle::idle(),
             startup_error: RwLock::new(None),
+            startup_progress: StartupProgress::default(),
             restart_in_progress: AtomicBool::new(false),
             runtime_generation: AtomicU64::new(0),
             session_titles: RwLock::new(HashMap::new()),
@@ -555,8 +558,11 @@ impl AppState {
             return invoke_api(self, command, payload).await;
         }
         match path.as_str() {
-            "/settings/get" => serde_json::to_value(self.config.read().await.clone())
-                .unwrap_or_else(|_| json!({"status":"failed"})),
+            "/settings/get" => {
+                let config = self.config.read().await.clone();
+                serde_json::to_value(redacted_config(&config))
+                    .unwrap_or_else(|_| json!({"status":"failed"}))
+            }
             "/codex-model-catalog" | "/codex-config-model" => {
                 let config = self.config.read().await.clone();
                 current_renderer_model_catalog(&config).unwrap_or_else(api_error_message)
@@ -594,7 +600,11 @@ impl AppState {
                         })
                     })
                     .collect::<Vec<_>>();
-                session_metadata::thread_sort_keys(&codex_home(), &sessions)
+                let home = codex_home();
+                blocking_value("读取线程排序键", move || {
+                    Ok(session_metadata::thread_sort_keys(&home, &sessions))
+                })
+                .await
             }
             "/session/delete" => {
                 let session_id = bridge_string(&payload, "sessionId");
@@ -750,6 +760,7 @@ pub async fn invoke_api(state: &Arc<AppState>, command: &str, args: Value) -> Va
             Err(error) => Err(error),
         },
         "runtime_status" => runtime_status(state).await,
+        "startup_progress" => startup_progress(state),
         "refresh_injection_status" => refresh_injection_status(state).await,
         "refresh_trace_log_stats" => refresh_trace_log_stats(state).await,
         "launch_codey" => launch_codey_runtime(state).await,
@@ -787,7 +798,12 @@ pub async fn load_codey_config(state: &Arc<AppState>) -> Result<Value, String> {
         "codexAppPathSelectionRequired": codex_app_path_selection_required,
         "ccSwitch": cc_switch,
         "modelState": model_state,
+        "startupProgress": state.startup_progress.snapshot(),
     }))
+}
+
+fn startup_progress(state: &Arc<AppState>) -> Result<Value, String> {
+    serde_json::to_value(state.startup_progress.snapshot()).map_err(|error| error.to_string())
 }
 
 async fn pick_codex_app_directory() -> Result<Value, String> {
@@ -967,21 +983,35 @@ pub async fn sync_official_experimental_features(state: &Arc<AppState>) -> Resul
 
 pub async fn sync_cc_switch_state(state: &Arc<AppState>) -> cc_switch::CcSwitchStatus {
     let previous = state.config.read().await.clone();
-    match cc_switch::sync_current_provider(&previous, &codex_home()) {
-        Ok((config, status)) => {
+    let sync_input = previous.clone();
+    let home = codex_home();
+    let store = state.store.clone();
+    let sync_result = tokio::task::spawn_blocking(move || {
+        let (config, status) = cc_switch::sync_current_provider(&sync_input, &home)
+            .map_err(|error| error.to_string())?;
+        if status.changed {
+            store
+                .save(&config)
+                .map_err(|error| format!("保存当前线路同步结果失败：{error}"))?;
+        }
+        Ok::<_, String>((config, status))
+    })
+    .await;
+    match sync_result {
+        Ok(Ok((config, status))) => {
             if status.changed {
-                if let Err(error) = state.store.save(&config) {
-                    let mut failed = cc_switch::status_from_config(&previous);
-                    failed.message = Some(format!("保存当前线路同步结果失败：{error}"));
-                    return failed;
-                }
                 *state.config.write().await = config;
             }
             status
         }
+        Ok(Err(error)) => {
+            let mut status = cc_switch::status_from_config(&previous);
+            status.message = Some(error);
+            status
+        }
         Err(error) => {
             let mut status = cc_switch::status_from_config(&previous);
-            status.message = Some(error.to_string());
+            status.message = Some(format!("同步当前线路任务异常退出：{error}"));
             status
         }
     }
@@ -1004,19 +1034,19 @@ fn startup_model_sync_models_or_default(models: Vec<String>) -> (Vec<String>, bo
     }
 }
 
-async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> CodeyConfig {
+async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> (CodeyConfig, Option<String>) {
     let config = state.config.read().await.clone();
     let Some(profile) = config.active_profile() else {
-        return config;
+        return (config, None);
     };
     if profile.cc_switch_read_only {
-        return config;
+        return (config, None);
     }
     let Some(provider_id) = config.current_provider_id().map(ToString::to_string) else {
-        return config;
+        return (config, None);
     };
 
-    let (models, synced) = match tokio::time::timeout(
+    let (models, synced, mut warning) = match tokio::time::timeout(
         STARTUP_PROVIDER_MODEL_SYNC_TIMEOUT,
         provider_models::fetch(&profile, &state.http_client),
     )
@@ -1036,34 +1066,54 @@ async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> CodeyConfig {
                     profile.name
                 );
             }
-            (models, synced)
+            let warning = (!synced)
+                .then(|| format!("线路「{}」返回空模型列表，已使用默认模型", profile.name));
+            (models, synced, warning)
         }
         Ok(Err(error)) => {
             eprintln!(
                 "启动时同步「{}」上游模型失败，使用默认 7 个模型：{error:#}",
                 profile.name
             );
-            (model_catalog::default_official_model_slugs(), false)
+            (
+                model_catalog::default_official_model_slugs(),
+                false,
+                Some(format!(
+                    "同步线路「{}」模型失败，已使用默认模型：{error:#}",
+                    profile.name
+                )),
+            )
         }
         Err(_) => {
             eprintln!(
                 "启动时同步「{}」上游模型超时，使用默认 7 个模型",
                 profile.name
             );
-            (model_catalog::default_official_model_slugs(), false)
+            (
+                model_catalog::default_official_model_slugs(),
+                false,
+                Some(format!(
+                    "同步线路「{}」模型超时，已使用默认模型",
+                    profile.name
+                )),
+            )
         }
     };
     let latest = state.config.read().await.clone();
     if latest.current_provider_id() != Some(provider_id.as_str()) {
         eprintln!("启动时同步模型期间当前线路已变化，忽略旧线路的同步结果");
-        return latest;
+        return (
+            latest,
+            Some("同步模型期间当前线路已变化，已忽略旧线路结果".to_string()),
+        );
     }
     let next = config_with_current_provider_models(&latest, models);
     if synced && let Err(error) = state.store.save(&next) {
         eprintln!("保存启动时模型同步结果失败，本次启动仍使用最新模型：{error:#}");
+        warning = Some(format!("模型已同步，但保存模型目录失败：{error:#}"));
     }
     *state.config.write().await = next.clone();
-    next
+    (next, warning)
 }
 
 pub async fn fetch_current_provider_models(state: &Arc<AppState>) -> Result<Value, String> {
@@ -1329,6 +1379,7 @@ pub async fn runtime_status(state: &Arc<AppState>) -> Result<Value, String> {
         "activeProfileName": profile.as_ref().map(|profile| profile.name.as_str()).unwrap_or_default(),
         "restartRequired": restart_required,
         "restartInProgress": state.restart_in_progress.load(Ordering::Acquire),
+        "startupProgress": state.startup_progress.snapshot(),
     });
     drop(config);
     if let Some(error) = state.startup_error.read().await.clone()
@@ -1381,10 +1432,37 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
     if state.runtime.lock().await.is_some() {
         return Ok(json!({"status":"already_running"}));
     }
+    state.startup_progress.start_step(
+        "prepare_runtime",
+        "准备 Codey 运行时",
+        "停止旧 watcher 并校验临时配置租约",
+    );
     stop_waiting_webhook_watcher(state).await;
     restore_previous_runtime_state(&codex_home())
         .map_err(|error| format!("恢复上次 Codey 临时 Codex 配置失败：{error}"))?;
-    let config = sync_provider_models_for_launch(state).await;
+    state
+        .startup_progress
+        .finish_step("prepare_runtime", "运行时状态已清理");
+    state.startup_progress.start_step(
+        "sync_provider_models",
+        "同步线路模型",
+        "第三方线路最多等待 5 秒，失败时使用默认模型",
+    );
+    let (config, model_sync_warning) = sync_provider_models_for_launch(state).await;
+    let profile_name = config
+        .active_profile()
+        .map(|profile| profile.name)
+        .unwrap_or_else(|| "未知线路".to_string());
+    if let Some(warning) = model_sync_warning {
+        state
+            .startup_progress
+            .warn_step("sync_provider_models", warning);
+    } else {
+        state.startup_progress.finish_step(
+            "sync_provider_models",
+            format!("线路「{profile_name}」的模型目录已准备"),
+        );
+    }
     let initial_scan_task = if webhook_watcher_should_run(&config) {
         let initial_event_cache = state
             .recent_session_event_cache
@@ -1397,7 +1475,9 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
         None
     };
     let handler = make_bridge_handler(state);
-    let (runtime, codex_exit) = match CodeyRuntime::start(&config, handler).await {
+    let (runtime, codex_exit) = match CodeyRuntime::start(&config, handler, &state.startup_progress)
+        .await
+    {
         Ok(started) => started,
         Err(error) => {
             if let Some(initial_scan_task) = initial_scan_task {
@@ -1407,6 +1487,11 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
             return Err(error.to_string());
         }
     };
+    state.startup_progress.start_step(
+        "finalize_runtime",
+        "完成运行时初始化",
+        "保存运行态并启动退出监视器",
+    );
     *state.runtime.lock().await = Some(Arc::new(runtime));
     let runtime_generation = state.runtime_generation.fetch_add(1, Ordering::AcqRel) + 1;
     if let Some(initial_scan_task) = initial_scan_task {
@@ -1423,6 +1508,9 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
             }
         }
     });
+    state
+        .startup_progress
+        .finish_step("finalize_runtime", "Codey bridge 与运行时监视器已就绪");
     Ok(json!({"status":"running"}))
 }
 
@@ -1432,8 +1520,13 @@ async fn launch_codey_inner(state: &Arc<AppState>) -> Result<Value, String> {
 }
 
 pub async fn launch_codey_runtime(state: &Arc<AppState>) -> Result<Value, String> {
+    state.startup_progress.ensure_session();
     let result = launch_codey_inner(state).await;
     *state.startup_error.write().await = result.as_ref().err().cloned();
+    match &result {
+        Ok(_) => state.startup_progress.complete(),
+        Err(error) => state.startup_progress.fail(error.clone()),
+    }
     result
 }
 
@@ -1448,20 +1541,36 @@ pub async fn schedule_restart_codey_runtime(state: &Arc<AppState>) -> Result<Val
         // deliver its response before stopping the renderer that owns it.
         tokio::time::sleep(Duration::from_millis(250)).await;
         let _operation = restart_state.runtime_operation.lock().await;
+        restart_state.startup_progress.begin_session();
+        restart_state.startup_progress.start_step(
+            "stop_previous_runtime",
+            "停止当前 Codex",
+            "关闭 bridge、watcher 和当前 Codex 进程",
+        );
         restart_state
             .runtime_generation
             .fetch_add(1, Ordering::AcqRel);
         if let Err(error) = stop_codey_runtime_locked(&restart_state).await {
+            restart_state
+                .startup_progress
+                .fail_step("stop_previous_runtime", error.clone());
+            restart_state.startup_progress.fail(error.clone());
             *restart_state.startup_error.write().await = Some(error);
             restart_state
                 .restart_in_progress
                 .store(false, Ordering::Release);
             return;
         }
+        restart_state
+            .startup_progress
+            .finish_step("stop_previous_runtime", "旧运行时已停止");
         let launch = launch_codey_inner_locked(&restart_state).await;
         *restart_state.startup_error.write().await = launch.as_ref().err().cloned();
-        if let Err(error) = launch {
+        if let Err(error) = &launch {
+            restart_state.startup_progress.fail(error.clone());
             eprintln!("Codey 自动重启 Codex 失败：{error}");
+        } else {
+            restart_state.startup_progress.complete();
         }
         restart_state
             .restart_in_progress
@@ -2296,11 +2405,26 @@ async fn webhook_session_name(state: &Arc<AppState>, payload: &Value, session_id
             .insert(session_id.to_string(), title.to_string());
     }
     let cached_title = state.session_titles.read().await.get(session_id).cloned();
-    session_metadata::resolve_session_name_with_preferred(
-        &codex_home(),
-        session_id,
-        cached_title.as_deref(),
-    )
+    let fallback_title = cached_title.clone();
+    let home = codex_home();
+    let session_id = session_id.to_string();
+    match tokio::task::spawn_blocking(move || {
+        session_metadata::resolve_session_name_with_preferred(
+            &home,
+            &session_id,
+            cached_title.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(session_name) => session_name,
+        Err(error) => {
+            eprintln!("读取 webhook 会话名称任务异常退出：{error}");
+            fallback_title
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "未命名会话".to_string())
+        }
+    }
 }
 
 fn terminal_notification_keys(session_id: &str, turn_id: &str) -> [String; 2] {
@@ -2735,6 +2859,19 @@ mod tests {
         assert_eq!(bridge_u64(&payload, "offset"), Some(42));
         assert_eq!(bridge_u64(&payload, "missing"), None);
         assert_eq!(bridge_u64(&payload, "wrongOffset"), None);
+    }
+
+    #[test]
+    fn renderer_settings_clear_provider_api_keys() {
+        let mut config = CodeyConfig::default();
+        config.profiles[0].api_key = "renderer-secret".to_string();
+        config.hide_full_access_warning = true;
+
+        let public = serde_json::to_value(redacted_config(&config)).unwrap();
+
+        assert_eq!(public["profiles"][0]["apiKey"], "");
+        assert_eq!(public["hideFullAccessWarning"], true);
+        assert!(!public.to_string().contains("renderer-secret"));
     }
 
     #[test]
