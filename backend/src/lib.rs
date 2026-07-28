@@ -4,6 +4,7 @@ mod codex_config;
 mod codex_startup_patch;
 mod commands;
 mod config;
+mod error_log;
 mod launcher;
 mod maintenance_lock;
 mod message_delete;
@@ -20,7 +21,6 @@ mod session_index_cleanup;
 mod session_metadata;
 mod session_transfer;
 mod startup_maintenance;
-mod startup_progress;
 mod trace_log_guard;
 mod trace_log_stats;
 mod update_helper;
@@ -43,6 +43,10 @@ pub fn run_update_helper_if_requested() -> Result<bool> {
     update_helper::run_if_requested().map_err(anyhow::Error::msg)
 }
 
+pub fn run_error_log_helper_if_requested() -> Result<bool> {
+    error_log::run_helper_if_requested()
+}
+
 pub async fn run() -> Result<()> {
     if std::env::args_os()
         .nth(1)
@@ -55,52 +59,26 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
+    error_log::initialize();
     let state = Arc::new(AppState::default());
-    state.startup_progress.begin_session();
-    state.startup_progress.start_step(
-        "restore_previous_state",
-        "恢复上次临时配置",
-        "检查异常退出后遗留的 Codex 配置租约",
-    );
     if let Err(error) = launcher::restore_previous_runtime_state(&codex_config::codex_home()) {
-        eprintln!("Codey 启动前恢复上次临时配置失败：{error:#}");
-        state
-            .startup_progress
-            .warn_step("restore_previous_state", format!("{error:#}"));
-    } else {
-        state
-            .startup_progress
-            .finish_step("restore_previous_state", "临时配置状态正常");
-    }
-    state.startup_progress.start_step(
-        "sync_current_provider",
-        "读取当前线路",
-        "同步 cc-switch 或本地 Codex 登录配置",
-    );
-    let provider_status = commands::sync_cc_switch_state(&state).await;
-    let provider_message = provider_status.message;
-    let local_provider_info = matches!(
-        provider_message.as_deref(),
-        Some("未检测到 cc-switch，已读取本地 Codex 直登配置") | Some("当前使用本地 Codex 直登配置")
-    );
-    if let Some(message) = provider_message {
-        if local_provider_info {
-            state
-                .startup_progress
-                .finish_step("sync_current_provider", message);
-        } else {
-            state
-                .startup_progress
-                .warn_step("sync_current_provider", message);
-        }
-    } else {
-        state.startup_progress.finish_step(
-            "sync_current_provider",
-            format!("当前线路：{}", provider_status.provider.name),
+        error_log::record_failure(
+            "restore_failed",
+            "restore_previous_runtime_state_at_startup",
+            format!("{error:#}"),
+            serde_json::json!({}),
         );
+        eprintln!("Codey 启动前恢复上次临时配置失败：{error:#}");
     }
+    commands::sync_cc_switch_state(&state).await;
 
     if let Err(error) = commands::launch_codey_runtime(&state).await {
+        error_log::record_failure(
+            "runtime_start_failed",
+            "auto_launch_codey_runtime",
+            format!("{error:#}"),
+            serde_json::json!({}),
+        );
         eprintln!("Codey 自动启动 Codex 失败：{error:#}");
     }
 
@@ -123,6 +101,14 @@ pub async fn run() -> Result<()> {
                 .map_err(|retry_error| format!("{first_error}；重试失败：{retry_error}"))
         }
     };
+    if let Err(error) = &cleanup {
+        error_log::record_failure(
+            "restore_failed",
+            "restore_runtime_during_shutdown",
+            error.clone(),
+            serde_json::json!({}),
+        );
+    }
     let shutdown_context = match shutdown_reason {
         ShutdownReason::CodexExited => "Codex 已退出",
         ShutdownReason::InstallUpdate => "Codey 正在安装更新",
@@ -131,7 +117,17 @@ pub async fn run() -> Result<()> {
     match process_cleanup::terminate_other_codey_processes().await {
         Ok(0) => {}
         Ok(count) => eprintln!("{shutdown_context}，已终止 {count} 个遗留 Codey 进程"),
-        Err(error) => eprintln!("{shutdown_context}，但清理遗留 Codey 进程失败：{error:#}"),
+        Err(error) => {
+            error_log::record_failure(
+                "cleanup_failed",
+                "terminate_other_codey_processes",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "shutdownContext": shutdown_context,
+                }),
+            );
+            eprintln!("{shutdown_context}，但清理遗留 Codey 进程失败：{error:#}");
+        }
     }
     cleanup.map_err(anyhow::Error::msg)
 }

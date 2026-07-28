@@ -11,6 +11,7 @@ use codey_runtime_core::cdp::{list_targets, pick_injectable_codex_page_target};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ExperimentalFeaturesConfig;
+use crate::error_log;
 
 const SETTINGS_OVERLAY_LOAD_PATH: &str = "/internal/codey/settings-overlay/load";
 const SESSION_TOOLS_LOAD_PATH: &str = "/internal/codey/session-tools/load";
@@ -506,37 +507,115 @@ pub async fn read_injection_statuses(
     websocket_url: &str,
     scripts: &PreparedInjectionScripts,
 ) -> Result<Arc<[InjectionScriptStatus]>> {
-    let response = codey_runtime_core::bridge::evaluate_script_with_await_promise(
-        websocket_url,
-        &injection_status_snapshot_script(&scripts.descriptors),
-        true,
-    )
-    .await
-    .context("查询脚本注入状态失败")?;
-    let payload = runtime_value(&response)
-        .and_then(serde_json::Value::as_str)
-        .context("脚本注入状态未返回可解析结果")?;
-    let reported = serde_json::from_str::<Vec<RuntimeInjectionStatus>>(payload)
-        .context("解析脚本注入状态失败")?;
-    Ok(reconcile_injection_statuses(&scripts.descriptors, reported))
+    let result: Result<Arc<[InjectionScriptStatus]>> = async {
+        let response = codey_runtime_core::bridge::evaluate_script_with_await_promise(
+            websocket_url,
+            &injection_status_snapshot_script(&scripts.descriptors),
+            true,
+        )
+        .await
+        .context("查询脚本注入状态失败")?;
+        let payload = runtime_value(&response)
+            .and_then(serde_json::Value::as_str)
+            .context("脚本注入状态未返回可解析结果")?;
+        let reported = serde_json::from_str::<Vec<RuntimeInjectionStatus>>(payload)
+            .context("解析脚本注入状态失败")?;
+        Ok(reconcile_injection_statuses(&scripts.descriptors, reported))
+    }
+    .await;
+
+    match result {
+        Ok(statuses) => {
+            record_failed_injection_statuses(websocket_url, &statuses);
+            Ok(statuses)
+        }
+        Err(error) => {
+            error_log::record_failure(
+                "injection_status_failed",
+                "read_injection_statuses",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "websocketUrl": websocket_url,
+                }),
+            );
+            Err(error)
+        }
+    }
 }
 
 pub async fn read_experimental_feature_runtime_status(
     websocket_url: &str,
     configured_features: ExperimentalFeaturesConfig,
 ) -> Result<ExperimentalFeatureRuntimeStatus> {
-    let response = codey_runtime_core::bridge::evaluate_script(
-        websocket_url,
-        experimental_feature_runtime_status_script(),
-    )
-    .await
-    .context("读取试验性功能运行态失败")?;
-    let payload = runtime_value(&response)
-        .and_then(serde_json::Value::as_str)
-        .context("试验性功能运行态未返回可解析结果")?;
-    let reported = serde_json::from_str::<ExperimentalFeatureRuntimeStatus>(payload)
-        .context("解析试验性功能运行态失败")?;
-    Ok(reported.reconciled(configured_features))
+    let result: Result<ExperimentalFeatureRuntimeStatus> = async {
+        let response = codey_runtime_core::bridge::evaluate_script(
+            websocket_url,
+            experimental_feature_runtime_status_script(),
+        )
+        .await
+        .context("读取试验性功能运行态失败")?;
+        let payload = runtime_value(&response)
+            .and_then(serde_json::Value::as_str)
+            .context("试验性功能运行态未返回可解析结果")?;
+        let reported = serde_json::from_str::<ExperimentalFeatureRuntimeStatus>(payload)
+            .context("解析试验性功能运行态失败")?;
+        Ok(reported.reconciled(configured_features))
+    }
+    .await;
+
+    match result {
+        Ok(status) => {
+            if matches!(status.status.as_str(), "error" | "mismatch") {
+                error_log::record_failure(
+                    "patch_verification_failed",
+                    "verify_experimental_feature_patches",
+                    status
+                        .detail
+                        .clone()
+                        .unwrap_or_else(|| "试验性功能运行态与配置不一致".to_string()),
+                    serde_json::json!({
+                        "status": status.status.as_str(),
+                        "mismatchedFeatures": &status.mismatched_features,
+                        "websocketUrl": websocket_url,
+                    }),
+                );
+            }
+            Ok(status)
+        }
+        Err(error) => {
+            error_log::record_failure(
+                "patch_verification_failed",
+                "read_experimental_feature_runtime_status",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "websocketUrl": websocket_url,
+                }),
+            );
+            Err(error)
+        }
+    }
+}
+
+fn record_failed_injection_statuses(websocket_url: &str, statuses: &[InjectionScriptStatus]) {
+    for status in statuses
+        .iter()
+        .filter(|status| status.status == "failed" || status.error.is_some())
+    {
+        error_log::record_failure(
+            "injection_script_failed",
+            status.id.clone(),
+            status
+                .error
+                .clone()
+                .unwrap_or_else(|| "注入脚本报告执行失败".to_string()),
+            serde_json::json!({
+                "name": status.name.as_str(),
+                "source": status.source.as_str(),
+                "detail": status.detail.as_deref(),
+                "websocketUrl": websocket_url,
+            }),
+        );
+    }
 }
 
 pub async fn read_official_experimental_features(

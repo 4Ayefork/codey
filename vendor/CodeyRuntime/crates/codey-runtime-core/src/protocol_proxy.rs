@@ -317,7 +317,7 @@ pub fn upstream_stream_header_timeout() -> Duration {
 pub fn upstream_http_client() -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(UPSTREAM_CONNECT_TIMEOUT)
-        .user_agent("Codey/ProtocolProxy")
+        .user_agent("CodeyRuntime/ProtocolProxy")
         .build()
         .context("failed to build upstream HTTP client")
 }

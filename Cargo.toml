@@ -1,6 +1,6 @@
 [workspace]
 members = ["backend"]
-exclude = ["vendor/Codey"]
+exclude = ["vendor/CodeyRuntime"]
 resolver = "2"
 
 [workspace.package]

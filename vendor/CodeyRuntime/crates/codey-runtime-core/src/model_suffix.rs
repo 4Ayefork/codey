@@ -192,7 +192,7 @@ pub fn build_model_catalog_json_with_template(
     serde_json::to_string_pretty(&json!({ "models": models })).unwrap_or_default()
 }
 
-/// Loads the complete model catalog bundled with Codey.
+/// Loads the complete model catalog bundled with CodeyRuntime.
 ///
 /// Callers should prefer a live Codex cache and use this only as a cold-start
 /// fallback when an API-only installation has not created models_cache.json.

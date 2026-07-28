@@ -257,10 +257,10 @@ fn build_config_toml(base_url: &str, api_key: &str, protocol: RelayProtocol) -> 
         RelayProtocol::ChatCompletions => "chat",
     };
     [
-        "model_provider = \"Codey\"".to_string(),
+        "model_provider = \"CodeyRuntime\"".to_string(),
         String::new(),
-        "[model_providers.Codey]".to_string(),
-        "name = \"Codey\"".to_string(),
+        "[model_providers.CodeyRuntime]".to_string(),
+        "name = \"CodeyRuntime\"".to_string(),
         format!("wire_api = \"{wire_api}\""),
         "requires_openai_auth = true".to_string(),
         format!("base_url = \"{}\"", toml_string(base_url)),

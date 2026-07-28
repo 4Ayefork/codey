@@ -12,11 +12,7 @@ const BASE_URL_ENV_KEYS: &[&str] = &[
     "OPENAI_API_BASE",
     "OPENAI_API_URL",
 ];
-const API_KEY_ENV_KEYS: &[&str] = &[
-    "CODEY_OPENAI_API_KEY",
-    "CODEY_API_KEY",
-    "OPENAI_API_KEY",
-];
+const API_KEY_ENV_KEYS: &[&str] = &["CODEY_OPENAI_API_KEY", "CODEY_API_KEY", "OPENAI_API_KEY"];
 
 #[derive(Debug, Clone)]
 struct ModelSource {
@@ -51,7 +47,7 @@ pub async fn read_codex_model_catalog() -> Value {
         }
     }
     let env = std::env::vars().collect::<HashMap<_, _>>();
-    let client = match crate::http_client::proxied_client("Codey/1.0") {
+    let client = match crate::http_client::proxied_client("CodeyRuntime/1.0") {
         Ok(client) => client,
         Err(error) => {
             return json!({

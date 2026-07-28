@@ -23,6 +23,7 @@ use crate::codex_config::{
     restore_runtime_provider_config,
 };
 use crate::config::{CodeyConfig, ExperimentalFeaturesConfig, GpuLaunchMode};
+use crate::error_log;
 use crate::maintenance_lock;
 use crate::model_catalog;
 use crate::pet_slim_patch;
@@ -30,7 +31,6 @@ use crate::plugin_marketplace;
 use crate::provider_lease;
 use crate::session_index_cleanup::{self, SessionIndexCleanupReport};
 use crate::startup_maintenance::{self, ProviderSyncPlan};
-use crate::startup_progress::StartupProgress;
 use crate::trace_log_guard;
 
 const CDP_WATCHDOG_INTERVAL: Duration = Duration::from_secs(30);
@@ -131,13 +131,7 @@ impl CodeyRuntime {
     pub async fn start(
         config: &CodeyConfig,
         handler: codey_runtime_core::bridge::BridgeHandler,
-        startup_progress: &StartupProgress,
     ) -> Result<(Self, oneshot::Receiver<()>)> {
-        startup_progress.start_step(
-            "prepare_injection_bundle",
-            "准备注入脚本",
-            "构建 bridge、设置入口与运行时保护脚本",
-        );
         let home = codex_home();
         let injection_scripts = cdp::prepare_injection_scripts(
             config.fast_codex_startup,
@@ -146,28 +140,27 @@ impl CodeyRuntime {
             config.hide_full_access_warning,
             &config.user_scripts,
         );
-        let original_provider = ensure_global_model_provider(&home)?;
-        startup_progress.finish_step("prepare_injection_bundle", "bridge 与注入脚本包已准备");
-        startup_progress.start_step(
-            "trace_log_guard",
-            "配置 Trace 写盘防护",
-            "检查并更新现有 logs_*.sqlite",
-        );
         let trace_guard_home = home.clone();
         let disable_trace_log_writes = config.disable_trace_log_writes;
         let initial_trace_guard = tokio::task::spawn_blocking(move || {
             trace_log_guard::configure(&trace_guard_home, disable_trace_log_writes)
         });
+        let original_provider = ensure_global_model_provider(&home).map_err(|error| {
+            error_log::record_failure(
+                "patch_failed",
+                "ensure_global_model_provider",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "codexHome": home,
+                }),
+            );
+            error
+        })?;
 
         // Permanent maintenance runs before Codey creates the temporary
         // direct-provider lease. A lightweight header/SQLite validation normally
         // reuses the last successful provider sync; provider changes still
         // fall back to the complete rollout and SQLite repair.
-        startup_progress.start_step(
-            "repair_sessions",
-            "校验并修复会话数据",
-            "检查 rollout、SQLite 与 session_index.jsonl",
-        );
         let maintenance_home = home.clone();
         match maintenance_lock::recover_stale_locks(&maintenance_home) {
             Ok(recovered) => {
@@ -175,10 +168,20 @@ impl CodeyRuntime {
                     eprintln!("已清理陈旧维护锁：{}", path.display());
                 }
             }
-            Err(error) => eprintln!("清理陈旧维护锁失败：{error:#}"),
+            Err(error) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "recover_stale_maintenance_locks",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "codexHome": maintenance_home,
+                    }),
+                );
+                eprintln!("清理陈旧维护锁失败：{error:#}");
+            }
         }
         let maintenance_provider = original_provider.clone();
-        let (provider_sync, index_cleanup) = tokio::task::spawn_blocking(move || {
+        let maintenance_result = tokio::task::spawn_blocking(move || {
             let provider_sync = match startup_maintenance::provider_sync_plan(
                 &maintenance_home,
                 &maintenance_provider,
@@ -196,6 +199,14 @@ impl CodeyRuntime {
                         && let Err(error) =
                             startup_maintenance::record_provider_sync_success(&maintenance_provider)
                     {
+                        error_log::record_failure(
+                            "patch_failed",
+                            "record_provider_sync_success",
+                            format!("{error:#}"),
+                            serde_json::json!({
+                                "provider": maintenance_provider,
+                            }),
+                        );
                         eprintln!("保存 Provider 同步状态失败：{error:#}");
                     }
                     result
@@ -206,32 +217,86 @@ impl CodeyRuntime {
             let index_cleanup = session_index_cleanup::cleanup(&maintenance_home);
             (provider_sync, index_cleanup)
         })
-        .await
-        .context("启动前会话修复任务异常退出")?;
+        .await;
+        let (provider_sync, index_cleanup) = match maintenance_result {
+            Ok(result) => result,
+            Err(error) => {
+                let error = anyhow::Error::new(error).context("启动前会话修复任务异常退出");
+                error_log::record_failure(
+                    "patch_failed",
+                    "run_startup_session_repairs",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "codexHome": home,
+                    }),
+                );
+                return Err(error);
+            }
+        };
+        if provider_sync.status != ProviderSyncStatus::Synced {
+            error_log::record_failure(
+                "patch_failed",
+                "sync_session_providers",
+                provider_sync.message.clone(),
+                serde_json::json!({
+                    "status": format!("{:?}", provider_sync.status),
+                    "targetProvider": provider_sync.target_provider,
+                    "skippedLockedFiles": provider_sync.skipped_locked_rollout_files.len(),
+                }),
+            );
+        } else if !provider_sync.skipped_locked_rollout_files.is_empty() {
+            error_log::record_failure(
+                "patch_failed",
+                "sync_session_providers",
+                format!(
+                    "跳过 {} 个被占用的会话文件",
+                    provider_sync.skipped_locked_rollout_files.len()
+                ),
+                serde_json::json!({
+                    "targetProvider": provider_sync.target_provider,
+                    "skippedLockedFiles": provider_sync.skipped_locked_rollout_files,
+                }),
+            );
+        }
+        if let Err(error) = &index_cleanup {
+            error_log::record_failure(
+                "patch_failed",
+                "cleanup_session_index",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "codexHome": home,
+                }),
+            );
+        }
         let (session_status, session_detail, session_threads) =
             session_maintenance_summary(&provider_sync, &index_cleanup);
-        if session_status == "error" {
-            startup_progress.warn_step("repair_sessions", session_detail.clone());
-        } else {
-            startup_progress.finish_step("repair_sessions", session_detail.clone());
+        match initial_trace_guard.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "configure_trace_log_guard",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "disabled": disable_trace_log_writes,
+                    }),
+                );
+                return Err(error);
+            }
+            Err(error) => {
+                let error = anyhow::Error::new(error).context("Trace 日志保护切换任务异常退出");
+                error_log::record_failure(
+                    "patch_failed",
+                    "configure_trace_log_guard",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "disabled": disable_trace_log_writes,
+                    }),
+                );
+                return Err(error);
+            }
         }
-        initial_trace_guard
-            .await
-            .context("Trace 日志保护切换任务异常退出")??;
-        startup_progress.finish_step(
-            "trace_log_guard",
-            if disable_trace_log_writes {
-                "Trace 写盘防护已启用"
-            } else {
-                "Trace 写盘防护已关闭"
-            },
-        );
 
-        startup_progress.start_step(
-            "resolve_codex_app",
-            "定位 Codex 桌面应用",
-            "解析已保存路径与平台默认安装位置",
-        );
         let configured_app_path = config.codex_app_path.trim();
         let app_dir = resolve_codex_app_dir_with_saved(
             (!configured_app_path.is_empty())
@@ -246,22 +311,7 @@ impl CodeyRuntime {
                 anyhow::anyhow!(CODEX_APP_PATH_INVALID_ERROR)
             }
         })?;
-        startup_progress.finish_step(
-            "resolve_codex_app",
-            format!("Codex 路径：{}", app_dir.display()),
-        );
-        startup_progress.start_step(
-            "check_existing_codex",
-            "检查现有 Codex 进程",
-            "Windows 启动补丁要求完全退出旧实例",
-        );
         prepare_codex_for_launch(&app_dir).await?;
-        startup_progress.finish_step("check_existing_codex", "没有冲突的 Codex 实例");
-        startup_progress.start_step(
-            "apply_provider_config",
-            "应用线路与模型配置",
-            "刷新模型目录并创建本次运行的临时配置租约",
-        );
         let current_profile = config
             .active_profile()
             .ok_or_else(|| anyhow::anyhow!("找不到当前 Codex 线路"))?;
@@ -274,23 +324,53 @@ impl CodeyRuntime {
         ) {
             Ok(_) => true,
             Err(error) if model_catalog::is_available(&home) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "refresh_model_catalog",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "fallback": "last_valid_catalog",
+                        "officialProvider": official_provider,
+                    }),
+                );
                 eprintln!("刷新官方账号模型目录失败，沿用上一份合法镜像：{error:#}");
                 true
             }
             Err(error) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "refresh_model_catalog",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "fallback": "codex_builtin_catalog",
+                        "officialProvider": official_provider,
+                    }),
+                );
                 eprintln!("刷新官方账号模型目录失败，临时使用 Codex 内置目录：{error:#}");
                 false
             }
         };
-        let default_model = model_catalog::selection_state(
+        let default_model = match model_catalog::selection_state(
             &home,
             official_provider,
             config.upstream_models_snapshot(),
             config.selected_models(),
             config.default_model(),
-        )
-        .unwrap_or_default()
-        .default_model;
+        ) {
+            Ok(state) => state.default_model,
+            Err(error) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "read_model_catalog_selection",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "fallback": "empty_default_model",
+                        "officialProvider": official_provider,
+                    }),
+                );
+                String::new()
+            }
+        };
         apply_runtime_provider_config(
             &home,
             &current_profile,
@@ -299,17 +379,22 @@ impl CodeyRuntime {
             (!default_model.is_empty()).then_some(default_model.as_str()),
             config.fast_context_tools,
             config.subagent_optimization,
-        )?;
-        startup_progress.finish_step(
-            "apply_provider_config",
-            format!("已应用线路「{}」", current_profile.name),
-        );
+        )
+        .map_err(|error| {
+            error_log::record_failure(
+                "patch_failed",
+                "apply_runtime_provider_config",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "profile": current_profile.name,
+                    "provider": original_provider,
+                    "fastContextTools": config.fast_context_tools,
+                    "subagentOptimization": config.subagent_optimization,
+                }),
+            );
+            error
+        })?;
 
-        startup_progress.start_step(
-            "check_local_patches",
-            "检查插件与本地补丁",
-            "并行检查插件市场和宠物精简配置",
-        );
         let marketplace_home = home.clone();
         let marketplace_task = tokio::task::spawn_blocking(move || {
             plugin_marketplace::marketplaces_status(&marketplace_home)
@@ -336,35 +421,52 @@ impl CodeyRuntime {
                 "needs_repair".to_string(),
                 "插件市场需要修复；可在 Codey 配置页手动处理".to_string(),
             ),
-            Err(error) => (
-                "error".to_string(),
-                format!("插件市场状态任务异常退出：{error}"),
-            ),
+            Err(error) => {
+                error_log::record_failure(
+                    "patch_status_failed",
+                    "read_plugin_marketplace_status",
+                    error.to_string(),
+                    serde_json::json!({}),
+                );
+                (
+                    "error".to_string(),
+                    format!("插件市场状态任务异常退出：{error}"),
+                )
+            }
         };
         let debug_port = codey_runtime_core::ports::select_packaged_codex_debug_port(9229);
         match pet_result {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "configure_codex_pet_slim",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "enabled": slim_codex_pet,
+                    }),
+                );
                 return Err(restore_runtime_config_after_error(
                     &home,
                     error.context("应用 Codex 宠物精简设置失败"),
                 ));
             }
             Err(error) => {
+                error_log::record_failure(
+                    "patch_failed",
+                    "configure_codex_pet_slim",
+                    error.to_string(),
+                    serde_json::json!({
+                        "enabled": slim_codex_pet,
+                        "taskJoinFailed": true,
+                    }),
+                );
                 return Err(restore_runtime_config_after_error(
                     &home,
                     anyhow::Error::new(error).context("Codex 宠物精简设置任务异常退出"),
                 ));
             }
         };
-        startup_progress.finish_step(
-            "check_local_patches",
-            if plugin_status == "ready" {
-                "插件市场与本地补丁状态正常"
-            } else {
-                "本地补丁已完成，插件市场需要后续修复"
-            },
-        );
         let spawned = match spawn_codex(
             &app_dir,
             debug_port,
@@ -373,7 +475,6 @@ impl CodeyRuntime {
             config.fast_codex_startup,
             config.experimental_features,
             config.gpu_launch_mode,
-            startup_progress,
         )
         .await
         {
@@ -394,22 +495,36 @@ impl CodeyRuntime {
         #[cfg(target_os = "macos")]
         let inspector_argument = spawned.inspector_argument.clone();
         let child = Arc::new(Mutex::new(spawned.child));
-        startup_progress.start_step(
-            "inject_cdp_bridge",
-            "连接页面并注入 Codey",
-            "等待 Codex Renderer 就绪，最多重试 30 次",
-        );
         let injected_target =
             match cdp::retry_inject_with_scripts(debug_port, handler.clone(), &injection_scripts)
                 .await
             {
                 Ok(target) => target,
                 Err(error) => {
-                    startup_progress.fail_step("inject_cdp_bridge", format!("{error:#}"));
+                    error_log::record_failure(
+                        "injection_failed",
+                        "inject_cdp_bridge",
+                        format!("{error:#}"),
+                        serde_json::json!({
+                            "appPath": app_dir,
+                            "debugPort": debug_port,
+                            "attempts": 30,
+                            "processId": spawned.process_id,
+                        }),
+                    );
                     #[cfg(windows)]
                     if let Err(stop_error) =
                         terminate_windows_codex_processes(&app_dir, spawned.process_id).await
                     {
+                        error_log::record_failure(
+                            "cleanup_failed",
+                            "cleanup_windows_after_injection_failure",
+                            format!("{stop_error:#}"),
+                            serde_json::json!({
+                                "appPath": app_dir,
+                                "processId": spawned.process_id,
+                            }),
+                        );
                         eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
                     }
                     #[cfg(target_os = "macos")]
@@ -422,6 +537,16 @@ impl CodeyRuntime {
                         )
                         .await
                         {
+                            error_log::record_failure(
+                                "cleanup_failed",
+                                "cleanup_macos_after_injection_failure",
+                                format!("{stop_error:#}"),
+                                serde_json::json!({
+                                    "appPath": app_dir,
+                                    "processId": spawned.process_id,
+                                    "processGroupId": spawned.process_group_id,
+                                }),
+                            );
                             eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
                         }
                     }
@@ -434,23 +559,24 @@ impl CodeyRuntime {
                     )
                     .await
                     {
+                        error_log::record_failure(
+                            "cleanup_failed",
+                            "cleanup_unix_after_injection_failure",
+                            format!("{stop_error:#}"),
+                            serde_json::json!({
+                                "appPath": app_dir,
+                                "processId": spawned.process_id,
+                                "processGroupId": spawned.process_group_id,
+                            }),
+                        );
                         eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
                     }
-                    if let Some(mut child) = child.lock().await.take()
-                        && tokio::time::timeout(Duration::from_secs(2), child.wait())
-                            .await
-                            .is_err()
-                    {
-                        let _ = child.kill().await;
-                        let _ = child.wait().await;
+                    if let Some(child) = child.lock().await.take() {
+                        reap_child_after_cleanup(child, "reap_child_after_injection_failure").await;
                     }
                     return Err(restore_runtime_config_after_error(&home, error));
                 }
             };
-        startup_progress.finish_step(
-            "inject_cdp_bridge",
-            "Codey bridge、设置入口与脚本状态已注入",
-        );
 
         let injection_statuses = Arc::new(RwLock::new(injected_target.injection_statuses()));
         let experimental_feature_runtime = Arc::new(RwLock::new(
@@ -481,7 +607,20 @@ impl CodeyRuntime {
                     biased;
                     _ = &mut shutdown_rx => break 'watchdog,
                     result = cdp::is_target_healthy(target.websocket_url()) => {
-                        result.unwrap_or(false)
+                        match result {
+                            Ok(healthy) => healthy,
+                            Err(error) => {
+                                error_log::record_failure(
+                                    "injection_health_check_failed",
+                                    "check_cdp_bridge_health",
+                                    format!("{error:#}"),
+                                    serde_json::json!({
+                                        "websocketUrl": target.websocket_url(),
+                                    }),
+                                );
+                                false
+                            }
+                        }
                     }
                 };
                 if !watchdog_should_reinject(&mut consecutive_failures, healthy) {
@@ -511,6 +650,15 @@ impl CodeyRuntime {
                         consecutive_failures = 0;
                     }
                     Err(error) => {
+                        error_log::record_failure(
+                            "injection_failed",
+                            "reinject_cdp_bridge",
+                            format!("{error:#}"),
+                            serde_json::json!({
+                                "debugPort": watchdog_debug_port,
+                                "attempts": 30,
+                            }),
+                        );
                         *watchdog_injection_statuses.write().await = watchdog_injection_scripts
                             .statuses_with_error(format!("脚本重新注入失败：{error:#}"));
                         *watchdog_experimental_feature_runtime.write().await =
@@ -562,6 +710,12 @@ impl CodeyRuntime {
         let watchdog_task = self.watchdog_task.lock().await.take();
         if let Some(task) = watchdog_task {
             if let Err(error) = task.await {
+                error_log::record_failure(
+                    "injection_watchdog_failed",
+                    "stop_cdp_watchdog",
+                    error.to_string(),
+                    serde_json::json!({}),
+                );
                 eprintln!("Codey CDP watchdog 关闭失败：{error}");
             }
         }
@@ -602,15 +756,21 @@ impl CodeyRuntime {
         #[cfg(not(any(unix, windows)))]
         let process_stop: Result<()> = Ok(());
 
-        if let Some(mut child) = self.child.lock().await.take()
-            && tokio::time::timeout(Duration::from_secs(2), child.wait())
-                .await
-                .is_err()
-        {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+        if let Some(child) = self.child.lock().await.take() {
+            reap_child_after_cleanup(child, "reap_child_during_runtime_stop").await;
         }
         let config_restore = restore_runtime_config(&codex_home());
+        if let Err(error) = &process_stop {
+            error_log::record_failure(
+                "cleanup_failed",
+                "stop_codex_processes",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "appPath": self.codex_app_path,
+                    "processId": self.process_id,
+                }),
+            );
+        }
         match (process_stop, config_restore) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(process_error), Ok(())) => Err(process_error),
@@ -675,6 +835,24 @@ fn session_maintenance_summary(
 pub fn restore_previous_runtime_state(home: &std::path::Path) -> Result<()> {
     let provider_result = provider_lease::restore_legacy();
     let config_result = restore_runtime_provider_config(home);
+    if let Err(error) = &provider_result {
+        error_log::record_failure(
+            "restore_failed",
+            "restore_legacy_provider_lease",
+            format!("{error:#}"),
+            serde_json::json!({}),
+        );
+    }
+    if let Err(error) = &config_result {
+        error_log::record_failure(
+            "restore_failed",
+            "restore_runtime_provider_config",
+            format!("{error:#}"),
+            serde_json::json!({
+                "codexHome": home,
+            }),
+        );
+    }
     match (provider_result, config_result) {
         (Ok(_), Ok(_)) => Ok(()),
         (Err(provider), Ok(_)) => Err(provider).context("恢复会话 provider 失败"),
@@ -686,9 +864,20 @@ pub fn restore_previous_runtime_state(home: &std::path::Path) -> Result<()> {
 }
 
 pub fn restore_runtime_config(home: &std::path::Path) -> Result<()> {
-    restore_runtime_provider_config(home)
+    let result = restore_runtime_provider_config(home)
         .map(|_| ())
-        .context("恢复 Codex 配置失败")
+        .context("恢复 Codex 配置失败");
+    if let Err(error) = &result {
+        error_log::record_failure(
+            "restore_failed",
+            "restore_runtime_provider_config",
+            format!("{error:#}"),
+            serde_json::json!({
+                "codexHome": home,
+            }),
+        );
+    }
+    result
 }
 
 fn restore_runtime_config_after_error(
@@ -771,6 +960,14 @@ fn spawn_codex_exit_watcher(
                     match result {
                         Ok(()) => true,
                         Err(error) => {
+                            error_log::record_failure(
+                                "process_watch_failed",
+                                "wait_for_windows_codex_exit",
+                                format!("{error:#}"),
+                                serde_json::json!({
+                                    "processId": process_id,
+                                }),
+                            );
                             eprintln!("等待 Windows Codex 进程退出失败：{error:#}");
                             !codey_runtime_core::windows_enumerate_processes()
                                 .iter()
@@ -819,7 +1016,6 @@ async fn spawn_codex(
     fast_codex_startup: bool,
     experimental_features: ExperimentalFeaturesConfig,
     gpu_launch_mode: GpuLaunchMode,
-    startup_progress: &StartupProgress,
 ) -> Result<SpawnedCodex> {
     let patch_options = crate::codex_startup_patch::PatchOptions {
         disable_pet: disable_codex_pet,
@@ -831,38 +1027,43 @@ async fn spawn_codex(
 
     #[cfg(windows)]
     {
-        startup_progress.start_step(
-            "spawn_codex",
-            "拉起 Codex 进程",
-            "通过 Windows 应用激活器或桌面可执行文件启动",
-        );
-        let inspector_port = crate::codex_startup_patch::reserve_loopback_port()
-            .context("为 Codex 启动补丁选择本地调试端口失败")?;
+        let inspector_port =
+            crate::codex_startup_patch::reserve_loopback_port().map_err(|error| {
+                let error = error.context("为 Codex 启动补丁选择本地调试端口失败");
+                error_log::record_failure(
+                    "patch_failed",
+                    "reserve_startup_patch_port",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "platform": "windows",
+                    }),
+                );
+                error
+            })?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
         let mut launch_arguments = vec![inspector_arg];
         launch_arguments.extend(runtime_arguments);
         let mut spawned = spawn_windows_codex(app_dir, debug_port, &launch_arguments).await?;
-        startup_progress.finish_step(
-            "spawn_codex",
-            spawned
-                .process_id
-                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
-                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
-        );
-        startup_progress.start_step(
-            "install_startup_patch",
-            "安装 Windows 启动补丁",
-            "等待本地 Inspector 并应用慢启动、WMI 与资源保护",
-        );
         match crate::codex_startup_patch::install(inspector_port, patch_options).await {
             Ok(()) => {
-                startup_progress.finish_step("install_startup_patch", "Windows 启动补丁已安装");
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
                 return Ok(spawned);
             }
             Err(error) => {
-                startup_progress.fail_step("install_startup_patch", format!("{error:#}"));
+                error_log::record_failure(
+                    "patch_failed",
+                    "install_startup_patch",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "platform": "windows",
+                        "inspectorPort": inspector_port,
+                        "processId": spawned.process_id,
+                        "disablePet": patch_options.disable_pet,
+                        "disableVoice": patch_options.disable_voice,
+                        "fastCodexStartup": patch_options.fast_codex_startup,
+                    }),
+                );
                 stop_windows_spawned_codex(&mut spawned).await;
                 return Err(error)
                     .context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI");
@@ -872,13 +1073,19 @@ async fn spawn_codex(
 
     #[cfg(target_os = "macos")]
     {
-        startup_progress.start_step(
-            "spawn_codex",
-            "拉起 Codex 进程",
-            "启动独立的 Codex 桌面应用实例",
-        );
-        let inspector_port = crate::codex_startup_patch::reserve_loopback_port()
-            .context("为 macOS Codex 启动补丁选择本地调试端口失败")?;
+        let inspector_port =
+            crate::codex_startup_patch::reserve_loopback_port().map_err(|error| {
+                let error = error.context("为 macOS Codex 启动补丁选择本地调试端口失败");
+                error_log::record_failure(
+                    "patch_failed",
+                    "reserve_startup_patch_port",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "platform": "macos",
+                    }),
+                );
+                error
+            })?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
         let mut launch_arguments = vec![inspector_arg.clone()];
         launch_arguments.extend(runtime_arguments);
@@ -889,27 +1096,27 @@ async fn spawn_codex(
         };
         let mut spawned = spawn_command(command)?;
         spawned.inspector_argument = Some(inspector_arg.clone());
-        startup_progress.finish_step(
-            "spawn_codex",
-            spawned
-                .process_id
-                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
-                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
-        );
-        startup_progress.start_step(
-            "install_startup_patch",
-            "安装 macOS 启动补丁",
-            "等待本地 Inspector 并应用慢启动与资源保护",
-        );
         match crate::codex_startup_patch::install(inspector_port, patch_options).await {
             Ok(()) => {
-                startup_progress.finish_step("install_startup_patch", "macOS 启动补丁已安装");
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
                 return Ok(spawned);
             }
             Err(error) => {
-                startup_progress.fail_step("install_startup_patch", format!("{error:#}"));
+                error_log::record_failure(
+                    "patch_failed",
+                    "install_startup_patch",
+                    format!("{error:#}"),
+                    serde_json::json!({
+                        "platform": "macos",
+                        "inspectorPort": inspector_port,
+                        "processId": spawned.process_id,
+                        "processGroupId": spawned.process_group_id,
+                        "disablePet": patch_options.disable_pet,
+                        "disableVoice": patch_options.disable_voice,
+                        "fastCodexStartup": patch_options.fast_codex_startup,
+                    }),
+                );
                 if let Err(stop_error) = stop_macos_codex(
                     &inspector_arg,
                     app_dir,
@@ -918,15 +1125,20 @@ async fn spawn_codex(
                 )
                 .await
                 {
+                    error_log::record_failure(
+                        "cleanup_failed",
+                        "cleanup_macos_after_startup_patch_failure",
+                        format!("{stop_error:#}"),
+                        serde_json::json!({
+                            "appPath": app_dir,
+                            "processId": spawned.process_id,
+                            "processGroupId": spawned.process_group_id,
+                        }),
+                    );
                     eprintln!("Codex 启动补丁失败后的进程清理失败：{stop_error:#}");
                 }
-                if let Some(mut child) = spawned.child.take()
-                    && tokio::time::timeout(Duration::from_secs(2), child.wait())
-                        .await
-                        .is_err()
-                {
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
+                if let Some(child) = spawned.child.take() {
+                    reap_child_after_cleanup(child, "reap_child_after_startup_patch_failure").await;
                 }
                 return Err(error)
                     .context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI");
@@ -936,16 +1148,8 @@ async fn spawn_codex(
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        startup_progress.start_step("spawn_codex", "拉起 Codex 进程", "启动 Codex 桌面应用");
         let command = build_codex_command(app_dir, debug_port, &runtime_arguments);
         let mut spawned = spawn_command(command)?;
-        startup_progress.finish_step(
-            "spawn_codex",
-            spawned
-                .process_id
-                .map(|process_id| format!("Codex 进程已启动，PID {process_id}"))
-                .unwrap_or_else(|| "Codex 进程已启动".to_string()),
-        );
         spawned.performance_status = "ready".to_string();
         spawned.performance_detail = if disable_codex_pet {
             "当前平台不支持宠物硬屏蔽启动补丁".to_string()
@@ -955,6 +1159,51 @@ async fn spawn_codex(
             "当前平台无需 macOS / Windows 启动补丁".to_string()
         };
         Ok(spawned)
+    }
+}
+
+async fn reap_child_after_cleanup(mut child: Child, operation: &'static str) {
+    let process_id = child.id();
+    let needs_kill = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(_)) => false,
+        Ok(Err(error)) => {
+            error_log::record_failure(
+                "cleanup_failed",
+                operation,
+                error.to_string(),
+                serde_json::json!({
+                    "processId": process_id,
+                    "phase": "wait",
+                }),
+            );
+            true
+        }
+        Err(_) => true,
+    };
+    if !needs_kill {
+        return;
+    }
+    if let Err(error) = child.kill().await {
+        error_log::record_failure(
+            "cleanup_failed",
+            operation,
+            error.to_string(),
+            serde_json::json!({
+                "processId": process_id,
+                "phase": "kill",
+            }),
+        );
+    }
+    if let Err(error) = child.wait().await {
+        error_log::record_failure(
+            "cleanup_failed",
+            operation,
+            error.to_string(),
+            serde_json::json!({
+                "processId": process_id,
+                "phase": "wait_after_kill",
+            }),
+        );
     }
 }
 
@@ -1114,16 +1363,19 @@ async fn spawn_windows_codex(
 async fn stop_windows_spawned_codex(spawned: &mut SpawnedCodex) {
     if let Some(process_id) = spawned.process_id.take() {
         if let Err(error) = terminate_windows_process(process_id).await {
+            error_log::record_failure(
+                "cleanup_failed",
+                "cleanup_windows_after_startup_patch_failure",
+                format!("{error:#}"),
+                serde_json::json!({
+                    "processId": process_id,
+                }),
+            );
             eprintln!("Codex 启动失败后的进程清理失败：{error:#}");
         }
     }
-    if let Some(mut child) = spawned.child.take()
-        && tokio::time::timeout(Duration::from_secs(2), child.wait())
-            .await
-            .is_err()
-    {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Some(child) = spawned.child.take() {
+        reap_child_after_cleanup(child, "reap_child_after_startup_patch_failure").await;
     }
 }
 

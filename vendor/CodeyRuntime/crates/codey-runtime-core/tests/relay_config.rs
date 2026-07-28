@@ -1354,7 +1354,7 @@ fn apply_relay_config_file_switches_config_without_touching_auth_json() {
     let home = temp.path();
     std::fs::write(
         home.join("config.toml"),
-        "model_provider = \"Codey\"\nbase_url = \"old\"\n",
+        "model_provider = \"CodeyRuntime\"\nbase_url = \"old\"\n",
     )
     .unwrap();
     std::fs::write(home.join("auth.json"), "{\"auth_mode\":\"chatgpt\"}\n").unwrap();
@@ -1428,9 +1428,9 @@ fn apply_relay_config_removes_legacy_codey_provider_table() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(
         temp.path().join("config.toml"),
-        r#"model_provider = "Codey"
-[model_providers.Codey]
-name = "Codey"
+        r#"model_provider = "CodeyRuntime"
+[model_providers.CodeyRuntime]
+name = "CodeyRuntime"
 base_url = "https://old.example.test/v1"
 "#,
     )
@@ -1446,7 +1446,7 @@ base_url = "https://old.example.test/v1"
 
     assert!(updated.contains(r#"model_provider = "custom""#));
     assert!(updated.contains("[model_providers.custom]"));
-    assert!(!updated.contains("[model_providers.Codey]"));
+    assert!(!updated.contains("[model_providers.CodeyRuntime]"));
 }
 
 #[test]
@@ -1463,8 +1463,8 @@ requires_openai_auth = true
 base_url = "https://relay.example.test/v1"
 experimental_bearer_token = "sk-test-redacted"
 
-[model_providers.Codey]
-name = "Codey"
+[model_providers.CodeyRuntime]
+name = "CodeyRuntime"
 base_url = "https://old.example.test/v1"
 
 [model_providers.custom1]
@@ -1493,7 +1493,7 @@ model = "gpt-5-mini"
     assert!(!updated.contains("model_catalog_json"));
     assert!(!updated.contains("OPENAI_API_KEY"));
     assert!(!updated.contains("[model_providers.custom]"));
-    assert!(!updated.contains("[model_providers.Codey]"));
+    assert!(!updated.contains("[model_providers.CodeyRuntime]"));
     assert!(!updated.contains("[model_providers]\n"));
     assert!(!updated.contains("experimental_bearer_token"));
     assert!(updated.contains("[model_providers.custom1]"));

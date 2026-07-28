@@ -24,6 +24,57 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const disableVoice = __DISABLE_VOICE__;
   const fastCodexStartup = __FAST_CODEX_STARTUP__;
   const experimentalFeatureOverrides = __EXPERIMENTAL_FEATURE_OVERRIDES__;
+  const codeyErrorLoggerExecutable = "__CODEY_ERROR_LOGGER_EXECUTABLE__";
+  const recordCodeyPatchFailure = (operation, error, context = {}) => {
+    const unresolvedExecutable =
+      ["__CODEY", "ERROR_LOGGER_EXECUTABLE__"].join("_");
+    if (
+      !codeyErrorLoggerExecutable ||
+      codeyErrorLoggerExecutable === unresolvedExecutable
+    ) return;
+    const message = error instanceof Error
+      ? `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ""}`
+      : String(error || "unknown patch failure");
+    try {
+      const now = new Date();
+      const platform =
+        process.platform === "win32"
+          ? "windows"
+          : process.platform === "darwin"
+            ? "macos"
+            : process.platform;
+      const result = process.getBuiltinModule("child_process").spawnSync(
+        codeyErrorLoggerExecutable,
+        ["--codey-record-error"],
+        {
+          input: JSON.stringify({
+          timestamp: now.toISOString(),
+          timestampMs: now.getTime(),
+          pid: process.pid,
+          platform,
+          event: "patch_failed",
+          operation,
+          error: message,
+          context,
+          }),
+          encoding: "utf8",
+          maxBuffer: 64 * 1024,
+          timeout: 2000,
+          windowsHide: true,
+        },
+      );
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(
+          `Codey error log helper exited with ${result.status}: ${String(result.stderr || "").trim()}`,
+        );
+      }
+    } catch (logError) {
+      try {
+        console.error("[Codey] failed to write patch error log", logError);
+      } catch {}
+    }
+  };
   const codeyExperimentalFeatureKeyMap = {
     unified_exec: "unifiedExec",
     shell_snapshot: "shellSnapshot",
@@ -70,10 +121,11 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       return typeof replacement === "function" ? replacement(...args) : replacement;
     });
     if (count !== 1) {
+      const message =
+        `Codey skipped an incompatible Codex renderer patch: ${name} gate matched ${count} times`;
+      recordCodeyPatchFailure(`renderer_patch:${name}`, message, { matchCount: count });
       try {
-        console.error(
-          `Codey skipped an incompatible Codex renderer patch: ${name} gate matched ${count} times`,
-        );
+        console.error(message);
       } catch {}
       return source;
     }
@@ -86,10 +138,11 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       return typeof replacement === "function" ? replacement(...args) : replacement;
     });
     if (count === 0) {
+      const message =
+        `Codey skipped an incompatible Codex renderer patch: ${name} gate matched 0 times`;
+      recordCodeyPatchFailure(`renderer_patch:${name}`, message, { matchCount: count });
       try {
-        console.error(
-          `Codey skipped an incompatible Codex renderer patch: ${name} gate matched 0 times`,
-        );
+        console.error(message);
       } catch {}
       return source;
     }
@@ -423,6 +476,9 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       // shapes change between releases. These UI restorations are optional:
       // never turn a stale patch anchor into a failed app:// module request,
       // otherwise Codex remains on its static startup loader forever.
+      recordCodeyPatchFailure("patch_codex_renderer_asset", error, {
+        requestUrl: request?.url,
+      });
       try {
         console.error("Codey skipped an incompatible Codex renderer patch", error);
       } catch {}
@@ -1178,6 +1234,9 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       } else {
         optionalMainBundlePatchFailures.push(failure);
       }
+      recordCodeyPatchFailure(`optional_main_bundle_patch:${name}`, error, {
+        patchName: name,
+      });
       console.warn(`[Codey] skipped incompatible ${name} patch: ${message}`);
       return source;
     }
@@ -1208,6 +1267,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         return Reflect.apply(originalJsExtension, this, arguments);
       }
 
+      try {
       const fs = process.getBuiltinModule("fs");
       let source = fs.readFileSync(filename, "utf8");
       source = applyOptionalMainBundlePatch(
@@ -1361,6 +1421,10 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
       globalThis.__CODEY_APP_STATE_HEARTBEAT_SOURCE_PATCHED__ =
         !hasOptionalMainBundlePatchFailure("appStateHeartbeat");
       module._compile(source, filename);
+      } catch (error) {
+        recordCodeyPatchFailure("patch_codex_main_bundle", error, { filename });
+        throw error;
+      }
     };
   }
 
@@ -1519,7 +1583,24 @@ fn patch_expression(options: PatchOptions) -> String {
     let experimental_feature_overrides =
         serde_json::to_string(&options.experimental_features.codex_feature_overrides())
             .expect("experimental feature overrides should serialize");
+    let error_logger_executable = match std::env::current_exe() {
+        Ok(path) => serde_json::to_string(&path.to_string_lossy().to_string())
+            .expect("error logger executable path should serialize"),
+        Err(error) => {
+            crate::error_log::record_failure(
+                "patch_failed",
+                "resolve_error_log_helper",
+                error.to_string(),
+                serde_json::json!({}),
+            );
+            "\"\"".to_string()
+        }
+    };
     STARTUP_PATCH_TEMPLATE
+        .replace(
+            "\"__CODEY_ERROR_LOGGER_EXECUTABLE__\"",
+            &error_logger_executable,
+        )
         .replace(
             "__DISABLE_PET__",
             if options.disable_pet { "true" } else { "false" },
@@ -1779,6 +1860,9 @@ mod tests {
         assert!(expression.contains("statsigBootstrapTimeoutMs = 1500"));
         assert!(expression.contains("default Chinese locale"));
         assert!(expression.contains("__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__"));
+        assert!(expression.contains("spawnSync"));
+        assert!(expression.contains("--codey-record-error"));
+        assert!(!expression.contains("\"__CODEY_ERROR_LOGGER_EXECUTABLE__\""));
     }
 
     #[test]

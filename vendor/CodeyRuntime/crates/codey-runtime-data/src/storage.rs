@@ -638,7 +638,9 @@ impl SQLiteStorageAdapter {
             let mut stmt = db.prepare(&sql)?;
             let mut sort_keys = Vec::new();
             for thread_id in thread_ids {
-                if let Some(mut payload) = fetch_thread_timestamp_row(&mut stmt, &columns, &thread_id)? {
+                if let Some(mut payload) =
+                    fetch_thread_timestamp_row(&mut stmt, &columns, &thread_id)?
+                {
                     payload.insert("session_id".to_string(), json!(thread_id));
                     sort_keys.push(Value::Object(payload));
                 }
@@ -1529,10 +1531,10 @@ fn codex_thread_timestamp_columns(db: &Connection) -> anyhow::Result<Vec<String>
         "recency_at",
         "recency_at_ms",
     ]
-        .iter()
-        .filter(|column| existing.contains(**column))
-        .map(|column| column.to_string())
-        .collect())
+    .iter()
+    .filter(|column| existing.contains(**column))
+    .map(|column| column.to_string())
+    .collect())
 }
 
 fn fetch_thread_timestamp_payload(

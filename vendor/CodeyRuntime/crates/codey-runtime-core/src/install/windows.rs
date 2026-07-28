@@ -6,10 +6,9 @@ use super::{
 };
 
 #[cfg(windows)]
-const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codey";
+const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodeyRuntime";
 #[cfg(windows)]
-const LEGACY_UNINSTALL_SUBKEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codey";
+const LEGACY_UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codey";
 #[cfg(windows)]
 const URL_PROTOCOL_SUBKEY: &str = r"Software\Classes\codey";
 
@@ -44,10 +43,7 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
     let uninstall_command = format!("\"{}\"", uninstaller_path.to_string_lossy());
     let quiet_uninstall_command = format!("{uninstall_command} /S");
     WindowsEntrypointPlan {
-        silent_shortcut: install_root
-            .join("Codey.lnk")
-            .to_string_lossy()
-            .to_string(),
+        silent_shortcut: install_root.join("Codey.lnk").to_string_lossy().to_string(),
         manager_shortcut: install_root
             .join("Codey 管理工具.lnk")
             .to_string_lossy()
@@ -61,7 +57,7 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
         uninstaller_path: uninstaller_path.to_string_lossy().to_string(),
         uninstall_command,
         quiet_uninstall_command,
-        uninstall_key: "Codey".to_string(),
+        uninstall_key: "CodeyRuntime".to_string(),
         legacy_uninstall_key: "Codey".to_string(),
         remove_owned_data: options.remove_owned_data,
     }

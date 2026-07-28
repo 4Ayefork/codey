@@ -413,8 +413,7 @@ fn start_native_menu_localizer(inspector_port: u16) {
 
 #[cfg(windows)]
 fn apply_codey_window_icon_after_launch(process_id: u32) {
-    let icon_resource_path =
-        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("codey.exe"));
+    let icon_resource_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("codey.exe"));
     tokio::spawn(async move {
         for attempt in 1..=30 {
             if crate::windows_apply_codey_icon_to_process_window(

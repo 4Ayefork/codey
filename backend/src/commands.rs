@@ -21,6 +21,7 @@ use crate::cc_switch;
 use crate::cdp;
 use crate::codex_config::codex_home;
 use crate::config::{CodeyConfig, ConfigStore};
+use crate::error_log;
 use crate::launcher::{CodeyRuntime, restore_previous_runtime_state, restore_runtime_config};
 use crate::message_delete::delete_messages;
 use crate::model_catalog;
@@ -31,7 +32,6 @@ use crate::provider_models;
 use crate::session_delete;
 use crate::session_metadata;
 use crate::session_transfer;
-use crate::startup_progress::StartupProgress;
 use crate::trace_log_guard;
 use crate::trace_log_stats::{self, TraceLogStatsHandle, TraceLogStatsSnapshot};
 use crate::webhook::{WebhookDispatcher, WebhookEvent};
@@ -44,7 +44,6 @@ pub struct AppState {
     runtime_operation: Mutex<()>,
     pub trace_log_stats: TraceLogStatsHandle,
     pub startup_error: RwLock<Option<String>>,
-    pub startup_progress: StartupProgress,
     restart_in_progress: AtomicBool,
     runtime_generation: AtomicU64,
     session_titles: RwLock<HashMap<String, String>>,
@@ -102,7 +101,6 @@ impl Default for AppState {
             runtime_operation: Mutex::new(()),
             trace_log_stats: TraceLogStatsHandle::idle(),
             startup_error: RwLock::new(None),
-            startup_progress: StartupProgress::default(),
             restart_in_progress: AtomicBool::new(false),
             runtime_generation: AtomicU64::new(0),
             session_titles: RwLock::new(HashMap::new()),
@@ -708,13 +706,36 @@ impl AppState {
                 .unwrap_or_else(api_error_message),
             "/plugins/list" => {
                 let home = codex_home();
-                match tokio::task::spawn_blocking(move || plugin_marketplace::list_plugins(&home))
-                    .await
+                let plugins_home = home.clone();
+                match tokio::task::spawn_blocking(move || {
+                    plugin_marketplace::list_plugins(&plugins_home)
+                })
+                .await
                 {
-                    Ok(result) => {
-                        result.unwrap_or_else(|error| api_error_message(error.to_string()))
+                    Ok(Ok(result)) => result,
+                    Ok(Err(error)) => {
+                        error_log::record_failure(
+                            "patch_status_failed",
+                            "list_plugins",
+                            format!("{error:#}"),
+                            json!({
+                                "codexHome": home,
+                            }),
+                        );
+                        api_error_message(error.to_string())
                     }
-                    Err(error) => api_error_message(format!("插件列表任务异常退出：{error}")),
+                    Err(error) => {
+                        error_log::record_failure(
+                            "patch_status_failed",
+                            "list_plugins",
+                            error.to_string(),
+                            json!({
+                                "codexHome": home,
+                                "taskJoinFailed": true,
+                            }),
+                        );
+                        api_error_message(format!("插件列表任务异常退出：{error}"))
+                    }
                 }
             }
             "/plugins/status" => plugin_marketplace_status()
@@ -760,7 +781,6 @@ pub async fn invoke_api(state: &Arc<AppState>, command: &str, args: Value) -> Va
             Err(error) => Err(error),
         },
         "runtime_status" => runtime_status(state).await,
-        "startup_progress" => startup_progress(state),
         "refresh_injection_status" => refresh_injection_status(state).await,
         "refresh_trace_log_stats" => refresh_trace_log_stats(state).await,
         "launch_codey" => launch_codey_runtime(state).await,
@@ -798,12 +818,7 @@ pub async fn load_codey_config(state: &Arc<AppState>) -> Result<Value, String> {
         "codexAppPathSelectionRequired": codex_app_path_selection_required,
         "ccSwitch": cc_switch,
         "modelState": model_state,
-        "startupProgress": state.startup_progress.snapshot(),
     }))
-}
-
-fn startup_progress(state: &Arc<AppState>) -> Result<Value, String> {
-    serde_json::to_value(state.startup_progress.snapshot()).map_err(|error| error.to_string())
 }
 
 async fn pick_codex_app_directory() -> Result<Value, String> {
@@ -883,10 +898,23 @@ pub async fn save_codey_config(
     if config.disable_trace_log_writes != previous.disable_trace_log_writes {
         let home = codex_home();
         let disable_writes = config.disable_trace_log_writes;
-        tokio::task::spawn_blocking(move || trace_log_guard::configure(&home, disable_writes))
-            .await
-            .map_err(|error| format!("Trace 日志保护切换任务异常退出：{error}"))?
-            .map_err(|error| error.to_string())?;
+        let result =
+            tokio::task::spawn_blocking(move || trace_log_guard::configure(&home, disable_writes))
+                .await
+                .map_err(|error| format!("Trace 日志保护切换任务异常退出：{error}"))
+                .and_then(|result| result.map_err(|error| error.to_string()));
+        if let Err(error) = result {
+            error_log::record_failure(
+                "patch_failed",
+                "configure_trace_log_guard",
+                error.clone(),
+                json!({
+                    "disabled": disable_writes,
+                    "source": "save_codey_config",
+                }),
+            );
+            return Err(error);
+        }
     }
     state
         .store
@@ -909,13 +937,27 @@ pub async fn save_codey_config(
 pub async fn clear_codex_trace_logs(state: &Arc<AppState>) -> Result<Value, String> {
     let home = codex_home();
     let disable_writes = state.config.read().await.disable_trace_log_writes;
-    let report = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         trace_log_guard::configure(&home, disable_writes)?;
         trace_log_guard::clear(&home)
     })
     .await
-    .map_err(|error| format!("Trace 日志库清理任务异常退出：{error}"))?
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| format!("Trace 日志库清理任务异常退出：{error}"))
+    .and_then(|result| result.map_err(|error| error.to_string()));
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => {
+            error_log::record_failure(
+                "patch_failed",
+                "clear_codex_trace_logs",
+                error.clone(),
+                json!({
+                    "protectionEnabled": disable_writes,
+                }),
+            );
+            return Err(error);
+        }
+    };
     Ok(json!({
         "status":"ok",
         "cleanup":report,
@@ -972,9 +1014,21 @@ pub async fn sync_official_experimental_features(state: &Arc<AppState>) -> Resul
         return Err("Codex 当前未运行，无法同步官方试验性功能配置".to_string());
     };
     let websocket_url = runtime.renderer_websocket_url().await;
-    let experimental_features = cdp::read_official_experimental_features(&websocket_url)
-        .await
-        .map_err(|error| error.to_string())?;
+    let experimental_features = match cdp::read_official_experimental_features(&websocket_url).await
+    {
+        Ok(features) => features,
+        Err(error) => {
+            error_log::record_failure(
+                "patch_verification_failed",
+                "read_official_experimental_features",
+                format!("{error:#}"),
+                json!({
+                    "websocketUrl": websocket_url,
+                }),
+            );
+            return Err(error.to_string());
+        }
+    };
     Ok(json!({
         "status": "ok",
         "experimentalFeatures": experimental_features,
@@ -1034,19 +1088,19 @@ fn startup_model_sync_models_or_default(models: Vec<String>) -> (Vec<String>, bo
     }
 }
 
-async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> (CodeyConfig, Option<String>) {
+async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> CodeyConfig {
     let config = state.config.read().await.clone();
     let Some(profile) = config.active_profile() else {
-        return (config, None);
+        return config;
     };
     if profile.cc_switch_read_only {
-        return (config, None);
+        return config;
     }
     let Some(provider_id) = config.current_provider_id().map(ToString::to_string) else {
-        return (config, None);
+        return config;
     };
 
-    let (models, synced, mut warning) = match tokio::time::timeout(
+    let (models, synced) = match tokio::time::timeout(
         STARTUP_PROVIDER_MODEL_SYNC_TIMEOUT,
         provider_models::fetch(&profile, &state.http_client),
     )
@@ -1066,54 +1120,34 @@ async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> (CodeyConfig,
                     profile.name
                 );
             }
-            let warning = (!synced)
-                .then(|| format!("线路「{}」返回空模型列表，已使用默认模型", profile.name));
-            (models, synced, warning)
+            (models, synced)
         }
         Ok(Err(error)) => {
             eprintln!(
                 "启动时同步「{}」上游模型失败，使用默认 7 个模型：{error:#}",
                 profile.name
             );
-            (
-                model_catalog::default_official_model_slugs(),
-                false,
-                Some(format!(
-                    "同步线路「{}」模型失败，已使用默认模型：{error:#}",
-                    profile.name
-                )),
-            )
+            (model_catalog::default_official_model_slugs(), false)
         }
         Err(_) => {
             eprintln!(
                 "启动时同步「{}」上游模型超时，使用默认 7 个模型",
                 profile.name
             );
-            (
-                model_catalog::default_official_model_slugs(),
-                false,
-                Some(format!(
-                    "同步线路「{}」模型超时，已使用默认模型",
-                    profile.name
-                )),
-            )
+            (model_catalog::default_official_model_slugs(), false)
         }
     };
     let latest = state.config.read().await.clone();
     if latest.current_provider_id() != Some(provider_id.as_str()) {
         eprintln!("启动时同步模型期间当前线路已变化，忽略旧线路的同步结果");
-        return (
-            latest,
-            Some("同步模型期间当前线路已变化，已忽略旧线路结果".to_string()),
-        );
+        return latest;
     }
     let next = config_with_current_provider_models(&latest, models);
     if synced && let Err(error) = state.store.save(&next) {
         eprintln!("保存启动时模型同步结果失败，本次启动仍使用最新模型：{error:#}");
-        warning = Some(format!("模型已同步，但保存模型目录失败：{error:#}"));
     }
     *state.config.write().await = next.clone();
-    (next, warning)
+    next
 }
 
 pub async fn fetch_current_provider_models(state: &Arc<AppState>) -> Result<Value, String> {
@@ -1379,7 +1413,6 @@ pub async fn runtime_status(state: &Arc<AppState>) -> Result<Value, String> {
         "activeProfileName": profile.as_ref().map(|profile| profile.name.as_str()).unwrap_or_default(),
         "restartRequired": restart_required,
         "restartInProgress": state.restart_in_progress.load(Ordering::Acquire),
-        "startupProgress": state.startup_progress.snapshot(),
     });
     drop(config);
     if let Some(error) = state.startup_error.read().await.clone()
@@ -1432,37 +1465,10 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
     if state.runtime.lock().await.is_some() {
         return Ok(json!({"status":"already_running"}));
     }
-    state.startup_progress.start_step(
-        "prepare_runtime",
-        "准备 Codey 运行时",
-        "停止旧 watcher 并校验临时配置租约",
-    );
     stop_waiting_webhook_watcher(state).await;
     restore_previous_runtime_state(&codex_home())
         .map_err(|error| format!("恢复上次 Codey 临时 Codex 配置失败：{error}"))?;
-    state
-        .startup_progress
-        .finish_step("prepare_runtime", "运行时状态已清理");
-    state.startup_progress.start_step(
-        "sync_provider_models",
-        "同步线路模型",
-        "第三方线路最多等待 5 秒，失败时使用默认模型",
-    );
-    let (config, model_sync_warning) = sync_provider_models_for_launch(state).await;
-    let profile_name = config
-        .active_profile()
-        .map(|profile| profile.name)
-        .unwrap_or_else(|| "未知线路".to_string());
-    if let Some(warning) = model_sync_warning {
-        state
-            .startup_progress
-            .warn_step("sync_provider_models", warning);
-    } else {
-        state.startup_progress.finish_step(
-            "sync_provider_models",
-            format!("线路「{profile_name}」的模型目录已准备"),
-        );
-    }
+    let config = sync_provider_models_for_launch(state).await;
     let initial_scan_task = if webhook_watcher_should_run(&config) {
         let initial_event_cache = state
             .recent_session_event_cache
@@ -1475,9 +1481,7 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
         None
     };
     let handler = make_bridge_handler(state);
-    let (runtime, codex_exit) = match CodeyRuntime::start(&config, handler, &state.startup_progress)
-        .await
-    {
+    let (runtime, codex_exit) = match CodeyRuntime::start(&config, handler).await {
         Ok(started) => started,
         Err(error) => {
             if let Some(initial_scan_task) = initial_scan_task {
@@ -1487,11 +1491,6 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
             return Err(error.to_string());
         }
     };
-    state.startup_progress.start_step(
-        "finalize_runtime",
-        "完成运行时初始化",
-        "保存运行态并启动退出监视器",
-    );
     *state.runtime.lock().await = Some(Arc::new(runtime));
     let runtime_generation = state.runtime_generation.fetch_add(1, Ordering::AcqRel) + 1;
     if let Some(initial_scan_task) = initial_scan_task {
@@ -1508,9 +1507,6 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
             }
         }
     });
-    state
-        .startup_progress
-        .finish_step("finalize_runtime", "Codey bridge 与运行时监视器已就绪");
     Ok(json!({"status":"running"}))
 }
 
@@ -1520,12 +1516,17 @@ async fn launch_codey_inner(state: &Arc<AppState>) -> Result<Value, String> {
 }
 
 pub async fn launch_codey_runtime(state: &Arc<AppState>) -> Result<Value, String> {
-    state.startup_progress.ensure_session();
     let result = launch_codey_inner(state).await;
     *state.startup_error.write().await = result.as_ref().err().cloned();
-    match &result {
-        Ok(_) => state.startup_progress.complete(),
-        Err(error) => state.startup_progress.fail(error.clone()),
+    if let Err(error) = &result {
+        error_log::record_failure(
+            "runtime_start_failed",
+            "launch_codey_runtime",
+            error.clone(),
+            json!({
+                "restart": false,
+            }),
+        );
     }
     result
 }
@@ -1541,36 +1542,32 @@ pub async fn schedule_restart_codey_runtime(state: &Arc<AppState>) -> Result<Val
         // deliver its response before stopping the renderer that owns it.
         tokio::time::sleep(Duration::from_millis(250)).await;
         let _operation = restart_state.runtime_operation.lock().await;
-        restart_state.startup_progress.begin_session();
-        restart_state.startup_progress.start_step(
-            "stop_previous_runtime",
-            "停止当前 Codex",
-            "关闭 bridge、watcher 和当前 Codex 进程",
-        );
         restart_state
             .runtime_generation
             .fetch_add(1, Ordering::AcqRel);
         if let Err(error) = stop_codey_runtime_locked(&restart_state).await {
-            restart_state
-                .startup_progress
-                .fail_step("stop_previous_runtime", error.clone());
-            restart_state.startup_progress.fail(error.clone());
+            error_log::record_failure(
+                "runtime_restart_failed",
+                "stop_runtime_for_restart",
+                error.clone(),
+                json!({}),
+            );
             *restart_state.startup_error.write().await = Some(error);
             restart_state
                 .restart_in_progress
                 .store(false, Ordering::Release);
             return;
         }
-        restart_state
-            .startup_progress
-            .finish_step("stop_previous_runtime", "旧运行时已停止");
         let launch = launch_codey_inner_locked(&restart_state).await;
         *restart_state.startup_error.write().await = launch.as_ref().err().cloned();
-        if let Err(error) = &launch {
-            restart_state.startup_progress.fail(error.clone());
+        if let Err(error) = launch {
+            error_log::record_failure(
+                "runtime_restart_failed",
+                "launch_runtime_after_restart",
+                error.clone(),
+                json!({}),
+            );
             eprintln!("Codey 自动重启 Codex 失败：{error}");
-        } else {
-            restart_state.startup_progress.complete();
         }
         restart_state
             .restart_in_progress
@@ -2743,11 +2740,25 @@ pub async fn delete_session_record(
 pub async fn plugin_marketplace_status() -> Result<Value, String> {
     let home = codex_home();
     let marketplace_home = home.clone();
-    let mut status = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         plugin_marketplace::marketplaces_status(&marketplace_home)
     })
     .await
-    .map_err(|error| format!("插件市场状态任务异常退出：{error}"))?;
+    .map_err(|error| format!("插件市场状态任务异常退出：{error}"));
+    let mut status = match result {
+        Ok(status) => status,
+        Err(error) => {
+            error_log::record_failure(
+                "patch_status_failed",
+                "read_plugin_marketplace_status",
+                error.clone(),
+                json!({
+                    "codexHome": home,
+                }),
+            );
+            return Err(error);
+        }
+    };
     decorate_plugin_marketplace_status(&home, &mut status);
     Ok(status)
 }
@@ -2755,12 +2766,26 @@ pub async fn plugin_marketplace_status() -> Result<Value, String> {
 pub async fn repair_plugin_marketplace() -> Result<Value, String> {
     let home = codex_home();
     let marketplace_home = home.clone();
-    let repair = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         plugin_marketplace::ensure_marketplaces(&marketplace_home)
     })
     .await
-    .map_err(|error| format!("插件市场修复任务异常退出：{error}"))?
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| format!("插件市场修复任务异常退出：{error}"))
+    .and_then(|result| result.map_err(|error| error.to_string()));
+    let repair = match result {
+        Ok(repair) => repair,
+        Err(error) => {
+            error_log::record_failure(
+                "patch_failed",
+                "repair_plugin_marketplace",
+                error.clone(),
+                json!({
+                    "codexHome": home,
+                }),
+            );
+            return Err(error);
+        }
+    };
     let mut status = plugin_marketplace::marketplaces_status(&home);
     if let Some(object) = status.as_object_mut() {
         for key in ["initializedRemote", "configuredRemote", "configChanged"] {

@@ -16,10 +16,11 @@ path = "src/main.rs"
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-codey-runtime-core = { path = "../vendor/Codey/crates/codey-runtime-core" }
-codey-runtime-data = { path = "../vendor/Codey/crates/codey-runtime-data" }
+codey-runtime-core = { path = "../vendor/CodeyRuntime/crates/codey-runtime-core" }
+codey-runtime-data = { path = "../vendor/CodeyRuntime/crates/codey-runtime-data" }
 directories = "6"
 fastctx = { git = "https://github.com/yc-duan/fastctx", rev = "8056641e3969bc10ffc4871b5fa01ca8a91544e4", default-features = false }
+fs2 = "0.4"
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }

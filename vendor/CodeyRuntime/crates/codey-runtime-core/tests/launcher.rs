@@ -17,7 +17,9 @@ use codey_runtime_core::launcher::{
     launch_and_inject_with_hooks,
 };
 #[cfg(windows)]
-use codey_runtime_core::launcher::{WindowsProcessControlStrategy, windows_process_control_strategy};
+use codey_runtime_core::launcher::{
+    WindowsProcessControlStrategy, windows_process_control_strategy,
+};
 use codey_runtime_core::ports::{
     select_packaged_codex_debug_port_with, select_platform_loopback_port_with,
 };
@@ -418,10 +420,10 @@ fn launcher_windows_process_wait_uses_platform_cfg_guards() {
     let source = include_str!("../src/launcher.rs").replace("\r\n", "\n");
 
     assert!(source.contains(
-        "#[cfg(windows)]\nasync fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()>"
+        "#[cfg(windows)]\npub async fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()>"
     ));
     assert!(source.contains(
-        "#[cfg(not(windows))]\nasync fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()>"
+        "#[cfg(not(windows))]\npub async fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()>"
     ));
     assert!(source.contains(
         "#[cfg(windows)]\nfn wait_for_windows_process_id_blocking(process_id: u32) -> anyhow::Result<()>"

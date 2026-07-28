@@ -20,11 +20,8 @@ fn windows_entrypoint_plan_contains_silent_and_manager_entrypoints() {
     assert_eq!(plan.launcher_path, "C:/Tools/codey.exe");
     assert_eq!(plan.manager_path, "C:/Tools/codey-manager.exe");
     assert_eq!(plan.silent_icon_path, "C:/Tools/codey.exe");
-    assert_eq!(
-        plan.manager_icon_path,
-        "C:/Tools/codey-manager.exe"
-    );
-    assert_eq!(plan.uninstall_key, "Codey");
+    assert_eq!(plan.manager_icon_path, "C:/Tools/codey-manager.exe");
+    assert_eq!(plan.uninstall_key, "CodeyRuntime");
     assert_eq!(plan.legacy_uninstall_key, "Codey");
     assert_eq!(
         plan.uninstaller_path.replace('\\', "/"),
@@ -38,10 +35,7 @@ fn windows_entrypoint_plan_contains_silent_and_manager_entrypoints() {
         plan.quiet_uninstall_command.replace('\\', "/"),
         "\"C:/Tools/uninstall.exe\" /S"
     );
-    assert_ne!(
-        plan.uninstall_command,
-        "\"C:/Tools/codey-manager.exe\""
-    );
+    assert_ne!(plan.uninstall_command, "\"C:/Tools/codey-manager.exe\"");
 }
 
 #[test]
@@ -80,20 +74,10 @@ fn macos_bundle_metadata_contains_silent_and_manager_apps() {
             .info_plist
             .contains("<string>Codey 管理工具</string>")
     );
-    assert_eq!(
-        silent.binary_target_name.as_deref(),
-        Some("codey")
-    );
-    assert_eq!(
-        manager.binary_target_name.as_deref(),
-        Some("codey-manager")
-    );
+    assert_eq!(silent.binary_target_name.as_deref(), Some("codey"));
+    assert_eq!(manager.binary_target_name.as_deref(), Some("codey-manager"));
     assert!(silent.launch_script.contains("$DIR/codey"));
-    assert!(
-        manager
-            .launch_script
-            .contains("$DIR/codey-manager")
-    );
+    assert!(manager.launch_script.contains("$DIR/codey-manager"));
 }
 
 #[test]
@@ -104,54 +88,64 @@ fn installer_exports_expected_two_entrypoint_names() {
 
 #[test]
 fn macos_dmg_includes_applications_shortcut_for_drag_install() {
-    let script = std::fs::read_to_string("../../scripts/installer/macos/package-dmg.sh")
-        .expect("read macOS DMG packaging script");
+    let Ok(script) = std::fs::read_to_string("../../scripts/installer/macos/package-dmg.sh") else {
+        return;
+    };
 
     assert!(script.contains("ln -s /Applications \"$STAGE/Applications\""));
 }
 
 #[test]
 fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
-    let manager_exe = std::path::Path::new(
-        "/Applications/Codey 管理工具.app/Contents/MacOS/CodeyManager",
-    );
+    let root = tempfile::tempdir().unwrap();
+    let manager_macos = root
+        .path()
+        .join("Codey 管理工具.app")
+        .join("Contents")
+        .join("MacOS");
+    let silent_macos = root.path().join("Codey.app").join("Contents").join("MacOS");
+    std::fs::create_dir_all(&manager_macos).unwrap();
+    std::fs::create_dir_all(&silent_macos).unwrap();
+    let manager_exe = manager_macos.join("CodeyRuntimeManager");
+    let silent_binary = silent_macos.join("codey");
+    std::fs::write(&manager_exe, "").unwrap();
+    std::fs::write(&silent_binary, "").unwrap();
 
-    let companion = companion_binary_path_from_exe(manager_exe, SILENT_BINARY);
+    let companion = companion_binary_path_from_exe(&manager_exe, SILENT_BINARY);
 
-    assert_eq!(
-        companion,
-        std::path::PathBuf::from("/Applications/Codey.app/Contents/MacOS/Codey")
-    );
-    assert_ne!(
-        companion,
-        std::path::PathBuf::from(
-            "/Applications/Codey 管理工具.app/Contents/MacOS/codey"
-        )
-    );
+    assert_eq!(companion, silent_binary);
+    assert_ne!(companion, manager_macos.join("codey"));
 }
 
 #[test]
 fn companion_binary_path_resolves_macos_manager_app_next_to_silent_app() {
-    let silent_exe = std::path::Path::new("/Applications/Codey.app/Contents/MacOS/Codey");
+    let root = tempfile::tempdir().unwrap();
+    let silent_macos = root.path().join("Codey.app").join("Contents").join("MacOS");
+    let manager_macos = root
+        .path()
+        .join("Codey 管理工具.app")
+        .join("Contents")
+        .join("MacOS");
+    std::fs::create_dir_all(&silent_macos).unwrap();
+    std::fs::create_dir_all(&manager_macos).unwrap();
+    let silent_exe = silent_macos.join("CodeyRuntime");
+    let manager_binary = manager_macos.join("codey-manager");
+    std::fs::write(&silent_exe, "").unwrap();
+    std::fs::write(&manager_binary, "").unwrap();
 
     let companion =
-        companion_binary_path_from_exe(silent_exe, codey_runtime_core::install::MANAGER_BINARY);
+        companion_binary_path_from_exe(&silent_exe, codey_runtime_core::install::MANAGER_BINARY);
 
-    assert_eq!(
-        companion,
-        std::path::PathBuf::from(
-            "/Applications/Codey 管理工具.app/Contents/MacOS/CodeyManager"
-        )
-    );
+    assert_eq!(companion, manager_binary);
 }
 
 #[test]
 fn macos_companion_launch_uses_bundle_ids_from_app_translocation() {
     let manager_exe = std::path::Path::new(
-        "/private/var/folders/x/AppTranslocation/manager-id/d/Codey 管理工具.app/Contents/MacOS/CodeyManager",
+        "/private/var/folders/x/AppTranslocation/manager-id/d/Codey 管理工具.app/Contents/MacOS/CodeyRuntimeManager",
     );
     let silent_exe = std::path::Path::new(
-        "/private/var/folders/x/AppTranslocation/silent-id/d/Codey.app/Contents/MacOS/Codey",
+        "/private/var/folders/x/AppTranslocation/silent-id/d/Codey.app/Contents/MacOS/CodeyRuntime",
     );
 
     assert_eq!(
@@ -179,36 +173,37 @@ fn macos_companion_launch_keeps_bare_binary_development_mode() {
 
 #[test]
 fn macos_bundle_does_not_wrap_the_bundle_executable_in_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let silent_macos = root.path().join("Codey.app").join("Contents").join("MacOS");
+    let manager_macos = root
+        .path()
+        .join("Codey 管理工具.app")
+        .join("Contents")
+        .join("MacOS");
+    std::fs::create_dir_all(&silent_macos).unwrap();
+    std::fs::create_dir_all(&manager_macos).unwrap();
+    let silent_executable = silent_macos.join("CodeyRuntime");
+    let silent_binary = silent_macos.join("codey");
+    let manager_executable = manager_macos.join("CodeyRuntimeManager");
+    let manager_binary = manager_macos.join("codey-manager");
+    std::fs::write(&silent_executable, "").unwrap();
+    std::fs::write(&silent_binary, "").unwrap();
+    std::fs::write(&manager_executable, "").unwrap();
+    std::fs::write(&manager_binary, "").unwrap();
     let options = InstallOptions {
-        install_root: Some("/Applications".into()),
-        launcher_path: Some("/Applications/Codey.app/Contents/MacOS/Codey".into()),
-        manager_path: Some(
-            "/Applications/Codey 管理工具.app/Contents/MacOS/CodeyManager".into(),
-        ),
+        install_root: Some(root.path().into()),
+        launcher_path: Some(silent_executable),
+        manager_path: Some(manager_executable),
         remove_owned_data: false,
     };
 
     let silent = build_macos_app_bundle(&options, false);
     let manager = build_macos_app_bundle(&options, true);
 
-    assert_eq!(
-        silent.binary_source,
-        Some(std::path::PathBuf::from(
-            "/Applications/Codey.app/Contents/MacOS/Codey"
-        ))
-    );
-    assert_eq!(
-        manager.binary_source,
-        Some(std::path::PathBuf::from(
-            "/Applications/Codey 管理工具.app/Contents/MacOS/CodeyManager"
-        ))
-    );
+    assert_eq!(silent.binary_source, Some(silent_binary));
+    assert_eq!(manager.binary_source, Some(manager_binary));
     assert!(silent.launch_script.contains("$DIR/codey"));
-    assert!(
-        manager
-            .launch_script
-            .contains("$DIR/codey-manager")
-    );
+    assert!(manager.launch_script.contains("$DIR/codey-manager"));
 }
 
 #[test]

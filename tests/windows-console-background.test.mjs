@@ -48,7 +48,7 @@ test("Windows packaged Codex exit uses an OS process wait instead of polling sna
       .then(normalizeLineEndings),
     readFile(
       new URL(
-        "../vendor/Codey/crates/codey-runtime-core/src/launcher.rs",
+        "../vendor/CodeyRuntime/crates/codey-runtime-core/src/launcher.rs",
         import.meta.url,
       ),
       "utf8",

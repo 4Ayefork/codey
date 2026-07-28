@@ -3,10 +3,8 @@ name = "codey-runtime-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
 
 [dependencies]
-aes-gcm.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
 base64.workspace = true

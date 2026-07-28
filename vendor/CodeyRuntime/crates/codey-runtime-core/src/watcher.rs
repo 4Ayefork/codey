@@ -14,9 +14,9 @@ pub const TAKEOVER_FAILURE_BACKOFF_SECONDS: f64 = 30.0;
 pub const RESTART_STOP_WAIT_TIMEOUT_MS: u64 = 5_000;
 #[cfg(windows)]
 const RESTART_STOP_WAIT_INTERVAL_MS: u64 = 100;
-pub const WATCHER_RUN_NAME: &str = "CodeyWatcher";
+pub const WATCHER_RUN_NAME: &str = "CodeyRuntimeWatcher";
 pub const WATCHER_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-pub const WATCHER_STARTUP_SHORTCUT_NAME: &str = "CodeyWatcher.lnk";
+pub const WATCHER_STARTUP_SHORTCUT_NAME: &str = "CodeyRuntimeWatcher.lnk";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatcherInstallPlan {

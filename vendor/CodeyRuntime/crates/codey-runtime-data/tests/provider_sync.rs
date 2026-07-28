@@ -209,7 +209,7 @@ fn provider_sync_rewrites_all_session_meta_model_providers() {
     let rollout = home.join("sessions/2026/rollout-multi-meta.jsonl");
     write_rollout_with_providers(
         &rollout,
-        &["openai", "ccx", "Codey"],
+        &["openai", "ccx", "CodeyRuntime"],
         "thread-1",
         "C:/workspace",
     );
@@ -244,7 +244,7 @@ fn provider_sync_target_discovery_reads_all_session_meta_providers() {
     fs::write(home.join("config.toml"), "model_provider = \"custom\"\n").unwrap();
     write_rollout_with_providers(
         &home.join("sessions/2026/rollout-multi-meta.jsonl"),
-        &["openai", "ccx", "Codey"],
+        &["openai", "ccx", "CodeyRuntime"],
         "thread-1",
         "C:/workspace",
     );
@@ -258,7 +258,7 @@ fn provider_sync_target_discovery_reads_all_session_meta_providers() {
 
     assert!(ids.contains(&"openai"));
     assert!(ids.contains(&"ccx"));
-    assert!(ids.contains(&"Codey"));
+    assert!(ids.contains(&"CodeyRuntime"));
 }
 
 #[test]

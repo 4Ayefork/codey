@@ -75,9 +75,11 @@ fn injection_script_includes_force_chinese_locale_global_and_patch() {
     assert!(script.contains(
         "window.__CODEY_FORCE_CHINESE_LOCALE__ = {\"enabled\":true,\"locale\":\"zh-CN\"};"
     ));
-    assert!(script.contains(
-        "window.__CODEY_FAST_STARTUP__ = {\"enabled\":true,\"statsigTimeoutMs\":800};"
-    ));
+    assert!(
+        script.contains(
+            "window.__CODEY_FAST_STARTUP__ = {\"enabled\":true,\"statsigTimeoutMs\":800};"
+        )
+    );
     assert!(script.contains("__codeyForceChineseLocaleInstalled"));
     assert!(script.contains("__codeyFastStartupInstalled"));
     assert!(script.contains("72216192"));

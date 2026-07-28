@@ -9,7 +9,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike};
 use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 
 const RELAY_PROVIDER: &str = "custom";
-const LEGACY_RELAY_PROVIDERS: &[&str] = &["Codey", "Codey"];
+const LEGACY_RELAY_PROVIDERS: &[&str] = &["CodeyRuntime", "CodeyRuntime"];
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "codey_chat_base_url";
 const RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "amazon-bedrock",
@@ -510,7 +510,7 @@ pub async fn test_relay_profile(
         anyhow::bail!("API Key 不能为空");
     }
 
-    let client = crate::http_client::proxied_client("Codey/RelayTest")?;
+    let client = crate::http_client::proxied_client("CodeyRuntime/RelayTest")?;
     let endpoint = match profile.protocol {
         RelayProtocol::Responses => format!("{base_url}/responses"),
         RelayProtocol::ChatCompletions => format!("{base_url}/chat/completions"),

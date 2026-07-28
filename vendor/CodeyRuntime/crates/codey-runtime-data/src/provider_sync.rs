@@ -197,7 +197,8 @@ pub fn run_provider_sync_with_target(
             .into_iter()
             .filter(|change| change.rewrite_needed)
             .collect::<Vec<_>>();
-        let sqlite_paths = codey_runtime_core::codex_sqlite::codex_session_db_paths_from_home(&home);
+        let sqlite_paths =
+            codey_runtime_core::codex_sqlite::codex_session_db_paths_from_home(&home);
         let sqlite_update_count = count_sqlite_updates_for_paths(
             &sqlite_paths,
             &target_provider,

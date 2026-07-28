@@ -361,10 +361,7 @@ pub fn activate_process_window(process_id: u32) -> bool {
 }
 
 #[cfg(windows)]
-pub fn apply_codey_icon_to_process_window(
-    process_id: u32,
-    icon_resource_path: PathBuf,
-) -> bool {
+pub fn apply_codey_icon_to_process_window(process_id: u32, icon_resource_path: PathBuf) -> bool {
     let Some(hwnd) = visible_window_for_process(process_id) else {
         return false;
     };
@@ -567,11 +564,7 @@ fn apply_taskbar_properties(hwnd: HWND, icon_resource_path: &PathBuf) -> anyhow:
         .ok()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| "codey.exe".to_string());
-    set_property_string(
-        &store,
-        &PKEY_AppUserModel_ID,
-        "com.codey.app.codex",
-    )?;
+    set_property_string(&store, &PKEY_AppUserModel_ID, "com.codey.app.codex")?;
     set_property_string(
         &store,
         &PKEY_AppUserModel_RelaunchIconResource,

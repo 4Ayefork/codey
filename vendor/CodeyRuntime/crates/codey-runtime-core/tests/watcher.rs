@@ -49,12 +49,9 @@ fn watcher_enable_and_disable_toggle_flag() {
 fn watcher_install_plan_registers_rust_launcher_at_logon() {
     let plan = build_watcher_install_plan("C:/Tools/codey.exe".into(), 9333);
 
-    assert_eq!(plan.run_value_name, "CodeyWatcher");
-    assert_eq!(
-        plan.run_value,
-        "\"C:/Tools/codey.exe\" --debug-port 9333"
-    );
-    assert_eq!(plan.shortcut_name, "CodeyWatcher.lnk");
+    assert_eq!(plan.run_value_name, "CodeyRuntimeWatcher");
+    assert_eq!(plan.run_value, "\"C:/Tools/codey.exe\" --debug-port 9333");
+    assert_eq!(plan.shortcut_name, "CodeyRuntimeWatcher.lnk");
     assert_eq!(plan.shortcut_target, "C:/Tools/codey.exe");
     assert_eq!(plan.shortcut_arguments, "--debug-port 9333");
 }
@@ -238,9 +235,7 @@ fn find_codex_processes_ignores_unrelated_processes() {
             process_id: 20,
             parent_process_id: 0,
             exe_file: "codey.exe".to_string(),
-            executable_path: Some(std::path::PathBuf::from(
-                r"D:\Programs\Codey\codey.exe",
-            )),
+            executable_path: Some(std::path::PathBuf::from(r"D:\Programs\Codey\codey.exe")),
         },
     ];
 
