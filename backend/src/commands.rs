@@ -503,6 +503,18 @@ async fn baseline_waiting_notifications(
     }
 }
 
+fn bridge_string(payload: &Value, name: &str) -> String {
+    payload
+        .get(name)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn bridge_u64(payload: &Value, name: &str) -> Option<u64> {
+    payload.get(name).and_then(Value::as_u64)
+}
+
 impl AppState {
     pub fn request_shutdown(&self) {
         self.request_shutdown_with_reason(AppShutdownReason::CodexExited);
@@ -585,26 +597,14 @@ impl AppState {
                 session_metadata::thread_sort_keys(&codex_home(), &sessions)
             }
             "/session/delete" => {
-                let session_id = payload
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let title = payload
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let session_id = bridge_string(&payload, "sessionId");
+                let title = bridge_string(&payload, "title");
                 delete_session_record(self, session_id, title)
                     .await
                     .unwrap_or_else(api_error_message)
             }
             "/session/export" => {
-                let session_id = payload
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let session_id = bridge_string(&payload, "sessionId");
                 let home = codex_home();
                 blocking_value("导出会话", move || {
                     session_transfer::export_session(&home, &session_id)
@@ -612,11 +612,7 @@ impl AppState {
                 .await
             }
             "/session/export/start" => {
-                let session_id = payload
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let session_id = bridge_string(&payload, "sessionId");
                 let home = codex_home();
                 blocking_value("准备会话导出", move || {
                     session_transfer::start_export_transfer(&home, &session_id)
@@ -624,12 +620,8 @@ impl AppState {
                 .await
             }
             "/session/export/chunk" => {
-                let transfer_id = payload
-                    .get("transferId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let Some(offset) = payload.get("offset").and_then(Value::as_u64) else {
+                let transfer_id = bridge_string(&payload, "transferId");
+                let Some(offset) = bridge_u64(&payload, "offset") else {
                     return api_error_message("缺少会话导出分块偏移");
                 };
                 let home = codex_home();
@@ -639,11 +631,7 @@ impl AppState {
                 .await
             }
             "/session/export/finish" | "/session/export/abort" => {
-                let transfer_id = payload
-                    .get("transferId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let transfer_id = bridge_string(&payload, "transferId");
                 let home = codex_home();
                 blocking_value("清理会话导出", move || {
                     session_transfer::finish_export_transfer(&home, &transfer_id)?;
@@ -652,16 +640,8 @@ impl AppState {
                 .await
             }
             "/session/import" => {
-                let project_path = payload
-                    .get("projectPath")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let data = payload
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let project_path = bridge_string(&payload, "projectPath");
+                let data = bridge_string(&payload, "data");
                 let home = codex_home();
                 blocking_value("导入会话", move || {
                     session_transfer::import_session(&home, &project_path, &data)
@@ -676,17 +656,9 @@ impl AppState {
                 .await
             }
             "/session/import/chunk" => {
-                let transfer_id = payload
-                    .get("transferId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let data = payload
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let Some(offset) = payload.get("offset").and_then(Value::as_u64) else {
+                let transfer_id = bridge_string(&payload, "transferId");
+                let data = bridge_string(&payload, "data");
+                let Some(offset) = bridge_u64(&payload, "offset") else {
                     return api_error_message("缺少会话导入分块偏移");
                 };
                 let home = codex_home();
@@ -701,16 +673,8 @@ impl AppState {
                 .await
             }
             "/session/import/finish" => {
-                let transfer_id = payload
-                    .get("transferId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let project_path = payload
-                    .get("projectPath")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let transfer_id = bridge_string(&payload, "transferId");
+                let project_path = bridge_string(&payload, "projectPath");
                 let home = codex_home();
                 blocking_value("完成会话导入", move || {
                     session_transfer::finish_import_transfer(&home, &project_path, &transfer_id)
@@ -718,11 +682,7 @@ impl AppState {
                 .await
             }
             "/session/import/abort" => {
-                let transfer_id = payload
-                    .get("transferId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let transfer_id = bridge_string(&payload, "transferId");
                 let home = codex_home();
                 blocking_value("清理会话导入", move || {
                     session_transfer::abort_import_transfer(&home, &transfer_id)?;
@@ -731,11 +691,7 @@ impl AppState {
                 .await
             }
             "/session/delete-messages" => {
-                let session_id = payload
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+                let session_id = bridge_string(&payload, "sessionId");
                 let message_ids = payload
                     .get("messageIds")
                     .and_then(Value::as_array)
@@ -2847,6 +2803,23 @@ where
 mod tests {
     use super::*;
     use crate::pending_approval::{AbortedTurn, PendingApproval, StartedTurn};
+
+    #[test]
+    fn bridge_field_helpers_preserve_existing_payload_semantics() {
+        let payload = json!({
+            "text": "  value  ",
+            "offset": 42,
+            "wrongText": 7,
+            "wrongOffset": "42",
+        });
+
+        assert_eq!(bridge_string(&payload, "text"), "  value  ");
+        assert_eq!(bridge_string(&payload, "missing"), "");
+        assert_eq!(bridge_string(&payload, "wrongText"), "");
+        assert_eq!(bridge_u64(&payload, "offset"), Some(42));
+        assert_eq!(bridge_u64(&payload, "missing"), None);
+        assert_eq!(bridge_u64(&payload, "wrongOffset"), None);
+    }
 
     #[test]
     fn model_sync_can_defer_catalog_refresh_until_a_model_is_selectable() {

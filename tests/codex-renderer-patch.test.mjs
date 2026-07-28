@@ -59,7 +59,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
           remote_compaction_v2: false,
         }),
       ),
-      "codey-startup-patch-installed-v15",
+      "codey-startup-patch-installed-v16",
     );
     const electron = Module._load("electron", undefined, false);
     const upstreamHandler = async () =>
@@ -121,6 +121,43 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       /Codey Statsig async initialization timeout/,
     );
     assert.doesNotMatch(patchedStatsigSource, /i\.initializeAsync\(\)\.catch/);
+
+    const interactionPerformanceSource = [
+      "Hcn=class{activeInteractions=new Map;beginCpuSampling;",
+      "start(e,n,u){let d={activeKey:e,",
+      "cpuSampling:u===`dropped`||n.backfilled===!0?null:this.beginCpuSampling(),",
+      "name:e};return this.activeInteractions.set(e,d),this.ensureHeartbeat(),d}",
+      "ensureHeartbeat(){this.heartbeatTimer??=setInterval(()=>{",
+      "let e=this.now(),t=this.wallNow();",
+      "for(let n of this.activeInteractions.values())",
+      "this.recordHeartbeat(n,e,t)},Vcn)}",
+      "recordHeartbeat(e,t,n){return [e,t,n]}};",
+      "const rendererProcessCpuPercentAvg=true;",
+      "function unrelated(){return beginCpuSampling()}",
+    ].join("");
+    electron.protocol.handle(
+      "app",
+      async () => new Response(interactionPerformanceSource),
+    );
+    const interactionPerformanceResponse = await installedHandler({
+      url: "app://-/assets/app-initial-BHB6SClA.js",
+    });
+    const patchedInteractionPerformance =
+      await interactionPerformanceResponse.text();
+    assert.match(patchedInteractionPerformance, /cpuSampling:null/);
+    assert.match(patchedInteractionPerformance, /ensureHeartbeat\(\)\{\}/);
+    assert.doesNotMatch(
+      patchedInteractionPerformance,
+      /heartbeatTimer\?\?=setInterval/,
+    );
+    assert.doesNotMatch(
+      patchedInteractionPerformance,
+      /cpuSampling:[^,}]*this\.beginCpuSampling\(\)/,
+    );
+    assert.match(
+      patchedInteractionPerformance,
+      /function unrelated\(\)\{return beginCpuSampling\(\)\}/,
+    );
 
     const featureSource = [
       "function Lln(e){",

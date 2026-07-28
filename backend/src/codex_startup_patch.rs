@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::config::ExperimentalFeaturesConfig;
 
-pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v15";
+pub const PATCH_RESULT: &str = "codey-startup-patch-installed-v16";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PatchOptions {
@@ -213,6 +213,31 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         (_match, clientName) =>
           `${clientName}.loadingStatus!==\`Ready\`&&Promise.race([${clientName}.initializeAsync(),new Promise((_,reject)=>globalThis.setTimeout(()=>reject(new Error("Codey Statsig async initialization timeout")),${statsigStartupRemainingMs}))]).catch(`,
         "Statsig async client initialization timeout",
+      );
+    }
+    if (
+      source.includes("activeInteractions=new Map") &&
+      source.includes("beginCpuSampling") &&
+      source.includes(
+        "ensureHeartbeat(){this.heartbeatTimer??=setInterval",
+      ) &&
+      source.includes("rendererProcessCpuPercentAvg")
+    ) {
+      // Codey launches app-server with analytics.enabled=false, so renderer
+      // interaction telemetry is discarded after paying for main/renderer CPU
+      // snapshots and a 1 Hz heartbeat. Preserve span lifecycle semantics while
+      // removing only those two recurring/IPC costs.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /cpuSampling:([$A-Z_a-z][$\w]*)===`dropped`\|\|([$A-Z_a-z][$\w]*)\.backfilled===!0\?null:this\.beginCpuSampling\(\)/g,
+        "cpuSampling:null",
+        "interaction CPU sampling",
+      );
+      patched = replaceUniqueRendererGate(
+        patched,
+        /ensureHeartbeat\(\)\{this\.heartbeatTimer\?\?=setInterval\(\(\)=>\{let ([$A-Z_a-z][$\w]*)=this\.now\(\),([$A-Z_a-z][$\w]*)=this\.wallNow\(\);for\(let ([$A-Z_a-z][$\w]*) of this\.activeInteractions\.values\(\)\)this\.recordHeartbeat\(\3,\1,\2\)\},([$A-Z_a-z][$\w]*)\)\}/g,
+        "ensureHeartbeat(){}",
+        "interaction heartbeat",
       );
     }
     if (
@@ -1343,7 +1368,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   setImmediate(() => {
     try { process.getBuiltinModule("inspector").close(); } catch {}
   });
-  return "codey-startup-patch-installed-v15";
+  return "codey-startup-patch-installed-v16";
 })()
 "#;
 
@@ -1573,7 +1598,7 @@ mod tests {
 
     #[test]
     fn patch_result_is_stable_for_launch_status_validation() {
-        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v15");
+        assert_eq!(PATCH_RESULT, "codey-startup-patch-installed-v16");
     }
 
     #[test]

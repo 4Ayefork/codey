@@ -5,7 +5,7 @@
   if (window.__codeySessionToolsInjectLoaded) return;
   window.__codeySessionToolsInjectLoaded = true;
   window.__codeyRendererInjectLoaded = true;
-  const buttonId = "codey-settings-button";
+  const rendererSettingsButtonSelector = "#codey-settings-button";
   const toolbarId = "codey-message-toolbar";
   const toastId = "codey-runtime-toast";
   const styleId = "codey-injected-style";
@@ -18,12 +18,6 @@
   const sidebarActionTooltipId = "codey-sidebar-action-tooltip";
   const threadUpdatedAtAttribute = "data-codey-thread-updated-at";
   const threadUpdatedAtMsAttribute = "data-codey-thread-updated-at-ms";
-  const settingsIcon = `
-    <svg viewBox="0 0 350 350" aria-hidden="true" focusable="false">
-      <rect x="0" y="0" width="350" height="350" rx="34" fill="#fff" stroke="none"></rect>
-      <path d="M70 301c-16 0-24-18-13-30l73-77c8-8 8-20 0-28L65 101C50 86 57 61 78 57c9-2 18 1 25 8l91 91c18 18 18 46 0 64l-66 66c-6 6-2 15 7 15h183" fill="none" stroke="currentColor" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"></path>
-    </svg>
-  `;
   const sessionExportIcon = `
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -60,7 +54,6 @@
   let sidebarActionTooltipAnchor = null;
   let threadUpdatedAtFetchTimer = 0;
   let threadUpdatedAtFetchInFlight = false;
-  let headerMountDirty = true;
   const threadUpdatedAtCache = new Map();
   const threadUpdatedAtRequestedAt = new Map();
   const pendingThreadUpdatedAtRefs = new Map();
@@ -207,13 +200,6 @@
     const style = document.createElement("style");
     style.id = styleId;
     style.textContent = `
-      #${buttonId} { -webkit-app-region: no-drag !important; pointer-events: auto !important; position: relative; z-index: 2147483641; display: inline-grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border: 0; border-radius: 8px; padding: 0; margin-inline-start: 8px; margin-inline-end: 18px; background: transparent; color: inherit; cursor: pointer; opacity: .86; user-select: none; transition: background .15s ease, opacity .15s ease, transform .15s ease; }
-      #${buttonId}[data-codey-header-actions="true"] { width: 28px; height: 28px; margin-inline-start: 0; margin-inline-end: 6px; }
-      #${buttonId}:hover { background: rgba(127, 127, 127, .14); opacity: 1; }
-      #${buttonId}:active { transform: translateY(1px); }
-      #${buttonId}:focus-visible { outline: 2px solid rgba(139, 151, 255, .72); outline-offset: 2px; }
-      #${buttonId} svg { display: block; width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 22; stroke-linecap: round; stroke-linejoin: round; }
-      #${buttonId} .codey-settings-label { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
       #${toolbarId} { -webkit-app-region: no-drag !important; position: fixed; right: 18px; top: 60px; z-index: 2147483644; display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid rgba(124, 140, 255, .44); border-radius: 999px; background: rgba(20, 24, 36, .68); color: rgba(238, 242, 255, .94); box-shadow: 0 8px 24px rgba(0,0,0,.18); backdrop-filter: blur(10px); font: 12px/1 system-ui, sans-serif; }
       #${toolbarId}[hidden] { display: none; }
       #${toolbarId} button { border: 1px solid rgba(120, 140, 180, .34); border-radius: 999px; padding: 4px 8px; background: rgba(40, 50, 70, .48); color: inherit; cursor: pointer; font: 12px/1 system-ui, sans-serif; }
@@ -259,129 +245,6 @@
       [data-codey-pet-control-blocked="true"] { display: none !important; pointer-events: none !important; }
     `;
     document.documentElement.appendChild(style);
-  };
-
-  const openSettings = () => {
-    if (window.__codeySettingsOverlay?.toggle) {
-      window.__codeySettingsOverlay.toggle();
-      return;
-    }
-    const detail = String(window.__codeyOverlayError || "").split("\n")[0];
-    window.alert(detail
-      ? `Codey 内嵌配置面板加载失败：${detail}`
-      : "Codey 内嵌配置面板尚未加载，请退出 Codex 后重新启动 Codey");
-  };
-
-  const isVisibleMountTarget = (element) => {
-    if (!(element instanceof HTMLElement)) return false;
-    if (element.closest("[hidden], [aria-hidden=true]")) return false;
-    const style = window.getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return style.display !== "none"
-      && style.visibility !== "hidden"
-      && rect.width > 0
-      && rect.height > 0;
-  };
-
-  const isTopChromeMountTarget = (element) => {
-    if (!isVisibleMountTarget(element)) return false;
-    const rect = element.getBoundingClientRect();
-    const viewportWidth = Math.max(
-      window.innerWidth || 0,
-      document.documentElement?.clientWidth || 0,
-      document.documentElement?.getBoundingClientRect?.().width || 0,
-      rect.right,
-    );
-    return rect.top <= 96
-      && rect.height <= 120
-      && rect.width >= 48
-      && rect.right >= viewportWidth - 48;
-  };
-
-  const findHeaderMount = () => {
-    const header = [...document.querySelectorAll("header")].find(isTopChromeMountTarget)
-      || [...document.querySelectorAll("nav")].find(isTopChromeMountTarget);
-    if (!header) return null;
-
-    const controls = [...header.querySelectorAll("button, [role=button], a[href]")]
-      .filter((control) => control.id !== buttonId && isVisibleMountTarget(control));
-    const rightmostControl = controls.reduce((rightmost, control) => (
-      !rightmost || control.getBoundingClientRect().right > rightmost.getBoundingClientRect().right
-        ? control
-        : rightmost
-    ), null);
-    if (!rightmostControl) return { header, target: header };
-
-    let headerChild = rightmostControl;
-    while (headerChild.parentElement && headerChild.parentElement !== header) {
-      headerChild = headerChild.parentElement;
-    }
-    const headerRect = header.getBoundingClientRect();
-    const childRect = headerChild.getBoundingClientRect();
-    const hasTrailingActionRegion = headerChild !== rightmostControl
-      && childRect.width <= 240
-      && childRect.right >= headerRect.right - 24;
-    return {
-      header,
-      target: header,
-      before: hasTrailingActionRegion ? headerChild : null,
-    };
-  };
-
-  const mountedButtonIsUsable = (button) => {
-    if (headerMountDirty || !(button instanceof HTMLElement) || button.isConnected !== true) {
-      return false;
-    }
-    const parent = button.parentElement;
-    if (!(parent instanceof HTMLElement) || button.closest("[hidden], [aria-hidden=true]")) {
-      return false;
-    }
-    const validParent = parent.matches?.("header, nav");
-    const anchored = button.dataset.codeyHeaderActions !== "true"
-      || (
-        !!button.nextElementSibling
-        && button.nextElementSibling === button.__codeyHeaderAnchor
-      );
-    return !!validParent && anchored;
-  };
-
-  const mountButton = () => {
-    addStyle();
-    const existingButton = document.getElementById(buttonId);
-    if (mountedButtonIsUsable(existingButton)) return;
-    const mount = findHeaderMount();
-    if (!mount) {
-      existingButton?.remove?.();
-      return;
-    }
-    let button = existingButton;
-    if (!button) {
-      button = document.createElement("button");
-      button.id = buttonId;
-      button.type = "button";
-      button.setAttribute("aria-label", "打开 Codey 配置");
-      button.innerHTML = `${settingsIcon}<span class="codey-settings-label">Codey</span>`;
-      button.title = "打开 Codey 配置";
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openSettings();
-      }, true);
-    }
-    if (mount.before) {
-      button.dataset.codeyHeaderActions = "true";
-    } else {
-      delete button.dataset.codeyHeaderActions;
-    }
-    if (mount.before) {
-      if (button.parentElement !== mount.target || button.nextElementSibling !== mount.before) {
-        mount.target.insertBefore(button, mount.before);
-      }
-    } else if (button.parentElement !== mount.target) {
-      mount.target.appendChild(button);
-    }
-    button.__codeyHeaderAnchor = mount.before || null;
-    headerMountDirty = false;
   };
 
   const selectedRows = () => [...document.querySelectorAll(`.${selectedClass}[data-codey-message-id]`)];
@@ -1796,10 +1659,9 @@
     }
   };
 
-  const scan = (root = document, syncTitles = true, mountSettings = true) => {
+  const scan = (root = document, syncTitles = true) => {
     window.__codeyBlockNativeVoiceControls?.(root);
     if (shouldIgnoreDeletedSidebarSessionRoot(root)) return;
-    if (mountSettings) mountButton();
     // Streaming output makes conversation turns by far the most frequent scan
     // root. Sidebar controls can never live inside a turn, so running their
     // installers there is a guaranteed-miss walk of the whole turn subtree.
@@ -1840,10 +1702,11 @@
   window.__codeyDeleteSelectedMessages = deleteSelected;
   window.__codeyReloadConversationAfterHardDelete = reloadConversationAfterHardDelete;
   window.__codeyInstallMessageSelection = installMessageSelection;
+  addStyle();
   scan();
 
   const codeyOwnedSelector = [
-    `#${buttonId}`,
+    rendererSettingsButtonSelector,
     `#${toolbarId}`,
     `#${toastId}`,
     `#${sessionDeletePopoverId}`,
@@ -1894,7 +1757,9 @@
   };
   const addPendingScanRoot = (root) => {
     if (!(root instanceof HTMLElement)) return;
-    if (root.matches?.("header, nav")) headerMountDirty = true;
+    if (root.matches?.("header, nav")) {
+      window.__codeyRendererInvalidateHeaderMount?.(root);
+    }
     for (const pendingRoot of pendingScanRoots) {
       if (pendingRoot === root || pendingRoot.contains?.(root)) return;
       if (root.contains?.(pendingRoot)) pendingScanRoots.delete(pendingRoot);
@@ -1911,8 +1776,7 @@
         candidateIndex,
       ) => candidateIndex !== index && candidate.contains?.(root)));
     pendingScanRoots.clear();
-    if (headerMountDirty) mountButton();
-    roots.forEach((root) => scan(root, true, false));
+    roots.forEach((root) => scan(root, true));
   };
   const scheduleIncrementalScan = (root) => {
     addPendingScanRoot(root);

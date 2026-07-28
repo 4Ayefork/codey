@@ -46,7 +46,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
   try {
     assert.equal(
       (0, eval)(await loadPatchExpression()),
-      "codey-startup-patch-installed-v15",
+      "codey-startup-patch-installed-v16",
     );
     Module._load("electron", undefined, false).protocol.handle(
       "app",

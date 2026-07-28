@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   IconAlertCircle as CircleAlert,
   IconInfoCircle as InfoCircle,
@@ -151,7 +152,7 @@ function normalizedDailyStats(stats: TraceLogStats): TraceLogDailyStats[] {
   });
 }
 
-export function TraceLogModule({
+function TraceLogModuleComponent({
   stats,
   snapshotStale,
   protectionEnabled,
@@ -426,3 +427,5 @@ export function TraceLogModule({
     </section>
   );
 }
+
+export const TraceLogModule = memo(TraceLogModuleComponent);

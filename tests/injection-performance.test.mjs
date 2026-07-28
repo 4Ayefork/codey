@@ -27,8 +27,15 @@ test("renderer core waits for sidebar interaction before loading session tools",
   assert.match(inject, /if \(mountedButtonIsUsable\(existingButton\)\) return;/);
   assert.match(inject, /button\.nextElementSibling === button\.__codeyHeaderAnchor/);
   assert.match(inject, /const isTopChromeMountTarget = \(element\) =>/);
+  assert.match(inject, /const visibleMountRect = \(element\) =>/);
+  assert.match(inject, /return \{ control, right: rect\.right \};/);
+  assert.doesNotMatch(
+    inject,
+    /control\.getBoundingClientRect\(\)\.right > rightmost\.getBoundingClientRect\(\)\.right/,
+  );
   assert.doesNotMatch(inject, /querySelector\("main"\)/);
   assert.match(inject, /headerMountDirty = true/);
+  assert.match(inject, /window\.__codeyRendererInvalidateHeaderMount = invalidateHeaderMount/);
   assert.doesNotMatch(inject, /new MutationObserver\(\(\) => \{[\s\S]*setTimeout\(scan,/);
   assert.doesNotMatch(inject, /characterData:\s*true/);
   assert.doesNotMatch(inject, /mutation\.type === "characterData"/);
@@ -39,15 +46,16 @@ test("renderer core waits for sidebar interaction before loading session tools",
   assert.match(sessionTools, /callBridge\("\/session\/wake-watcher"\)/);
   assert.match(sessionTools, /document\.addEventListener\("pointerdown", wakeSessionWatcher/);
   assert.match(sessionTools, /document\.addEventListener\("keydown", wakeSessionWatcherFromKey/);
-  assert.match(sessionTools, /const mountedButtonIsUsable = \(button\) =>/);
-  assert.match(sessionTools, /if \(mountedButtonIsUsable\(existingButton\)\) return;/);
-  assert.match(sessionTools, /button\.nextElementSibling === button\.__codeyHeaderAnchor/);
-  assert.match(sessionTools, /const isTopChromeMountTarget = \(element\) =>/);
+  assert.doesNotMatch(sessionTools, /const mountedButtonIsUsable = \(button\) =>/);
+  assert.doesNotMatch(sessionTools, /const isTopChromeMountTarget = \(element\) =>/);
+  assert.doesNotMatch(sessionTools, /const mountButton = \(\) =>/);
+  assert.doesNotMatch(sessionTools, /const settingsIcon = `/);
   assert.doesNotMatch(sessionTools, /querySelector\("main"\)/);
   assert.match(sessionTools, /fallbackSessionExportMaxBytes = 64 \* 1024 \* 1024/);
   assert.match(sessionTools, /exportSize > fallbackSessionExportMaxBytes/);
   assert.match(sessionTools, /watcherWakeTimer = window\.setTimeout\(\(\) => \{[\s\S]*\}, 30_000\)/);
-  assert.match(sessionTools, /if \(headerMountDirty\) mountButton\(\)/);
+  assert.match(sessionTools, /window\.__codeyRendererInvalidateHeaderMount\?\.\(root\)/);
+  assert.doesNotMatch(sessionTools, /headerMountDirty/);
   assert.match(sessionTools, /const threadUpdatedAtRows = new Set\(\)/);
   assert.doesNotMatch(
     sessionTools,

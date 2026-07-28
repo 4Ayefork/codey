@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   IconActivity as Activity,
   IconAlertCircle as CircleAlert,
@@ -98,6 +105,19 @@ function withTimeout<T>(
       },
     );
   });
+}
+
+function useStableEvent<Args extends unknown[], Result>(
+  callback: (...args: Args) => Result,
+): (...args: Args) => Result {
+  const callbackRef = useRef(callback);
+  useLayoutEffect(() => {
+    callbackRef.current = callback;
+  }, [callback]);
+  return useCallback(
+    (...args: Args) => callbackRef.current(...args),
+    [],
+  );
 }
 
 export function App({ embedded = false, onClose }: AppProps) {
@@ -865,6 +885,67 @@ export function App({ embedded = false, onClose }: AppProps) {
     });
   }
 
+  const handleCloseSettings = useStableEvent(closeSettings);
+  const handleSaveCurrent = useStableEvent(() => void saveCurrent());
+  const handleRepairPluginMarketplace = useStableEvent(
+    () => void repairPluginMarketplace(),
+  );
+  const handleRestartCodex = useStableEvent(askRestartCodex);
+  const handleCheckForUpdates = useStableEvent(
+    () => void checkForUpdates(),
+  );
+  const handleDownloadUpdate = useStableEvent(
+    () => void downloadUpdate(),
+  );
+  const handleInstallDownloadedUpdate = useStableEvent(
+    askInstallDownloadedUpdate,
+  );
+  const handleConfigChange = useStableEvent(editConfig);
+  const handleSyncOfficialExperimentalFeatures = useStableEvent(
+    () => void syncOfficialExperimentalFeatures(),
+  );
+  const handleWebhookChange = useStableEvent(updateWebhook);
+  const handleTestWebhook = useStableEvent(() => void testWebhook());
+  const handleSubagentOptimizationChange = useStableEvent(
+    (checked: boolean) => void updateSubagentOptimization(checked),
+  );
+  const handleSyncCurrentProvider = useStableEvent(
+    () => void syncCurrentProvider(),
+  );
+  const handleFetchCurrentModels = useStableEvent(
+    () => void fetchCurrentModels(),
+  );
+  const handleSetDefaultModel = useStableEvent(
+    (model: string) => void setDefaultModel(model),
+  );
+  const handleClearTraceLogs = useStableEvent(askClearTraceLogs);
+  const handleRefreshTraceLogStats = useStableEvent(
+    () => void refreshTraceLogStats(),
+  );
+  const handleModelPickerOpenChange = useStableEvent((open: boolean) => {
+    if (!isBusy || open) setModelPickerVisible(open);
+  });
+  const handleToggleDraftModel = useStableEvent(toggleDraftModel);
+  const handleSaveModelSelection = useStableEvent(
+    () => void saveModelSelection(),
+  );
+  const handleConfirmationClose = useStableEvent(
+    () => setConfirmation(null),
+  );
+  const handleConfirmationConfirm = useStableEvent((pending: Confirmation) => {
+    setConfirmation(null);
+    pending.run();
+  });
+  const handleCodexAppPathOpenChange = useStableEvent((open: boolean) => {
+    if (!isBusy) setCodexAppPathDialogVisible(open);
+  });
+  const handleChooseCodexAppDirectory = useStableEvent(
+    () => void chooseCodexAppDirectory(),
+  );
+  const handleConfirmCodexAppPath = useStableEvent(
+    () => void confirmCodexAppPath(),
+  );
+
   if (!config || !provider) {
     return (
       <main className="app-shell loading-shell">
@@ -898,7 +979,7 @@ export function App({ embedded = false, onClose }: AppProps) {
           <button
             className="traffic-light close"
             title="关闭"
-            onClick={embedded ? closeSettings : undefined}
+            onClick={embedded ? handleCloseSettings : undefined}
             aria-label="关闭窗口"
           />
           <button
@@ -943,7 +1024,7 @@ export function App({ embedded = false, onClose }: AppProps) {
               <SaveButton
                 className={`save-button${dirty ? " dirty" : ""}`}
                 disabled={!dirty || isBusy}
-                onClick={() => void saveCurrent()}
+                onClick={handleSaveCurrent}
               >
                 {busy === "save" ? (
                   <LoaderCircle className="spinner" aria-hidden="true" />
@@ -968,8 +1049,8 @@ export function App({ embedded = false, onClose }: AppProps) {
             busy={busy}
             isBusy={isBusy}
             pluginMarketplaceStatus={pluginMarketplaceStatus}
-            onRepairPluginMarketplace={() => void repairPluginMarketplace()}
-            onRestart={askRestartCodex}
+            onRepairPluginMarketplace={handleRepairPluginMarketplace}
+            onRestart={handleRestartCodex}
           />
 
           {/* 中间区域：分左右两栏 (左侧: 应用更新与试验性功能; 右侧: 飞书通知与功能策略) */}
@@ -983,9 +1064,9 @@ export function App({ embedded = false, onClose }: AppProps) {
                 downloadedUpdate={downloadedUpdate}
                 busy={busy}
                 isBusy={isBusy}
-                onCheckUpdates={() => void checkForUpdates()}
-                onDownloadUpdate={() => void downloadUpdate()}
-                onInstallUpdate={askInstallDownloadedUpdate}
+                onCheckUpdates={handleCheckForUpdates}
+                onDownloadUpdate={handleDownloadUpdate}
+                onInstallUpdate={handleInstallDownloadedUpdate}
               />
 
               <ExperimentalFeaturesCard
@@ -993,8 +1074,8 @@ export function App({ embedded = false, onClose }: AppProps) {
                 status={status}
                 busy={busy}
                 isBusy={isBusy}
-                onConfigChange={editConfig}
-                onSyncOfficial={() => void syncOfficialExperimentalFeatures()}
+                onConfigChange={handleConfigChange}
+                onSyncOfficial={handleSyncOfficialExperimentalFeatures}
               />
             </div>
 
@@ -1005,8 +1086,8 @@ export function App({ embedded = false, onClose }: AppProps) {
                 busy={busy}
                 isBusy={isBusy}
                 webhookResult={webhookResult}
-                onWebhookChange={updateWebhook}
-                onTestWebhook={() => void testWebhook()}
+                onWebhookChange={handleWebhookChange}
+                onTestWebhook={handleTestWebhook}
               />
 
               <FeaturePolicyCard
@@ -1015,10 +1096,8 @@ export function App({ embedded = false, onClose }: AppProps) {
                 busy={busy}
                 isBusy={isBusy}
                 subagentModel={SUBAGENT_MODEL}
-                onConfigChange={editConfig}
-                onSubagentOptimizationChange={(checked) =>
-                  void updateSubagentOptimization(checked)
-                }
+                onConfigChange={handleConfigChange}
+                onSubagentOptimizationChange={handleSubagentOptimizationChange}
               />
             </div>
           </div>
@@ -1032,9 +1111,9 @@ export function App({ embedded = false, onClose }: AppProps) {
               dirty={dirty}
               isBusy={isBusy}
               busy={busy}
-              onSyncCurrentProvider={() => void syncCurrentProvider()}
-              onFetchCurrentModels={() => void fetchCurrentModels()}
-              onSetDefaultModel={(model) => void setDefaultModel(model)}
+              onSyncCurrentProvider={handleSyncCurrentProvider}
+              onFetchCurrentModels={handleFetchCurrentModels}
+              onSetDefaultModel={handleSetDefaultModel}
             />
           </div>
 
@@ -1047,8 +1126,8 @@ export function App({ embedded = false, onClose }: AppProps) {
               clearBusy={busy === "clear-trace-logs"}
               refreshing={busy === "refresh-trace-stats"}
               disabled={isBusy}
-              onClear={askClearTraceLogs}
-              onRefresh={() => void refreshTraceLogStats()}
+              onClear={handleClearTraceLogs}
+              onRefresh={handleRefreshTraceLogStats}
             />
           </div>
         </div>
@@ -1089,23 +1168,18 @@ export function App({ embedded = false, onClose }: AppProps) {
         modelState={modelState}
         officialSlugs={officialSlugs}
         draftModelSet={draftModelSet}
-        onOpenChange={(open) => {
-          if (!isBusy || open) setModelPickerVisible(open);
-        }}
+        onOpenChange={handleModelPickerOpenChange}
         onModelQueryChange={setModelQuery}
         onDraftModelsChange={setDraftModels}
-        onToggleDraftModel={toggleDraftModel}
-        onSave={() => void saveModelSelection()}
+        onToggleDraftModel={handleToggleDraftModel}
+        onSave={handleSaveModelSelection}
       />
 
       <ConfirmationDialog
         confirmation={confirmation}
         container={portalContainer}
-        onClose={() => setConfirmation(null)}
-        onConfirm={(pending) => {
-          setConfirmation(null);
-          pending.run();
-        }}
+        onClose={handleConfirmationClose}
+        onConfirm={handleConfirmationConfirm}
       />
 
       {status.clientPlatform === "windows" && (
@@ -1116,11 +1190,9 @@ export function App({ embedded = false, onClose }: AppProps) {
           isBusy={isBusy}
           busy={busy}
           container={portalContainer}
-          onOpenChange={(open) => {
-            if (!isBusy) setCodexAppPathDialogVisible(open);
-          }}
-          onChooseDirectory={() => void chooseCodexAppDirectory()}
-          onConfirm={() => void confirmCodexAppPath()}
+          onOpenChange={handleCodexAppPathOpenChange}
+          onChooseDirectory={handleChooseCodexAppDirectory}
+          onConfirm={handleConfirmCodexAppPath}
         />
       )}
     </main>

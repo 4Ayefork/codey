@@ -1,4 +1,4 @@
-import { type CSSProperties, useRef, useState } from "react";
+import { memo, type CSSProperties, useRef, useState } from "react";
 import {
   IconActivity as Activity,
   IconAdjustmentsHorizontal,
@@ -127,7 +127,7 @@ type OperationsPanelProps = {
   onRestart: () => void;
 };
 
-export function OperationsPanel({
+function OperationsPanelComponent({
   config,
   status,
   busy,
@@ -726,7 +726,7 @@ type AppUpdateCardProps = {
   onInstallUpdate: () => void;
 };
 
-export function AppUpdateCard({
+function AppUpdateCardComponent({
   status,
   updateResult,
   updateCheck,
@@ -837,7 +837,7 @@ type ModelSectionProps = {
   onSetDefaultModel: (model: string) => void;
 };
 
-export function ModelSection({
+function ModelSectionComponent({
   ccSwitchStatus,
   provider,
   modelState,
@@ -1104,7 +1104,7 @@ type ExperimentalFeaturesCardProps = {
   onSyncOfficial: () => void;
 };
 
-export function ExperimentalFeaturesCard({
+function ExperimentalFeaturesCardComponent({
   config,
   status,
   busy,
@@ -1235,7 +1235,7 @@ type FeaturePolicyCardProps = {
   onSubagentOptimizationChange: (checked: boolean) => void;
 };
 
-export function FeaturePolicyCard({
+function FeaturePolicyCardComponent({
   config,
   status,
   busy,
@@ -1497,7 +1497,7 @@ type WebhookCardProps = {
   onTestWebhook: () => void;
 };
 
-export function WebhookCard({
+function WebhookCardComponent({
   config,
   busy,
   isBusy,
@@ -1569,3 +1569,10 @@ export function WebhookCard({
     </section>
   );
 }
+
+export const OperationsPanel = memo(OperationsPanelComponent);
+export const AppUpdateCard = memo(AppUpdateCardComponent);
+export const ModelSection = memo(ModelSectionComponent);
+export const ExperimentalFeaturesCard = memo(ExperimentalFeaturesCardComponent);
+export const FeaturePolicyCard = memo(FeaturePolicyCardComponent);
+export const WebhookCard = memo(WebhookCardComponent);

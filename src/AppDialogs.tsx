@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   IconCheck as Check,
   IconFolderOpen as FolderOpen,
@@ -38,7 +39,7 @@ type ModelPickerDialogProps = {
   onSave: () => void;
 };
 
-export function ModelPickerDialog({
+function ModelPickerDialogComponent({
   open,
   isBusy,
   busy,
@@ -140,7 +141,7 @@ type ConfirmationDialogProps = {
   onConfirm: (confirmation: Confirmation) => void;
 };
 
-export function ConfirmationDialog({
+function ConfirmationDialogComponent({
   confirmation,
   container,
   onClose,
@@ -192,7 +193,7 @@ type CodexAppPathDialogProps = {
   onConfirm: () => void;
 };
 
-export function CodexAppPathDialog({
+function CodexAppPathDialogComponent({
   open,
   selectedPath,
   error,
@@ -246,3 +247,7 @@ export function CodexAppPathDialog({
     </Dialog>
   );
 }
+
+export const ModelPickerDialog = memo(ModelPickerDialogComponent);
+export const ConfirmationDialog = memo(ConfirmationDialogComponent);
+export const CodexAppPathDialog = memo(CodexAppPathDialogComponent);
