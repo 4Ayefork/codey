@@ -60,6 +60,10 @@ function loadShield(enabled) {
     memoizedProps: { id: "settings.general.globalDictationHotkey.label" },
   };
   const localized = new FakeElement("开始听写");
+  const localizedNewVoiceChat = new FakeElement();
+  localizedNewVoiceChat.setAttribute("aria-label", "开始新的语音聊天");
+  const localizedTraditionalNewVoiceChat = new FakeElement();
+  localizedTraditionalNewVoiceChat.setAttribute("aria-label", "開始新的語音聊天");
   const gptVoiceComposer = new FakeElement();
   gptVoiceComposer.__reactProps$test = {
     children: { props: { id: "composer.realtime.start" } },
@@ -114,6 +118,8 @@ function loadShield(enabled) {
     semantic,
     settings,
     localized,
+    localizedNewVoiceChat,
+    localizedTraditionalNewVoiceChat,
     gptVoiceComposer,
     gptVoiceIcon,
     gptVoiceSettings,
@@ -188,6 +194,8 @@ function loadShield(enabled) {
     gptVoiceSettings,
     listeners,
     localized,
+    localizedNewVoiceChat,
+    localizedTraditionalNewVoiceChat,
     mediaCalls,
     nativeEnumerateDevices,
     nativeFetch,
@@ -211,6 +219,8 @@ test("voice slim mode blocks composer, settings, and localized voice controls", 
     runtime.semantic,
     runtime.settings,
     runtime.localized,
+    runtime.localizedNewVoiceChat,
+    runtime.localizedTraditionalNewVoiceChat,
     runtime.gptVoiceComposer,
     runtime.gptVoiceIcon,
     runtime.gptVoiceSettings,

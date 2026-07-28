@@ -46,7 +46,7 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
   try {
     assert.equal(
       (0, eval)(await loadPatchExpression()),
-      "codey-startup-patch-installed-v17",
+      "codey-startup-patch-installed-v18",
     );
     Module._load("electron", undefined, false).protocol.handle(
       "app",
@@ -341,46 +341,82 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
       /if\(n!==`chatgpt`\)return!0/,
     );
 
-    // The Fast service-tier icon is no longer blanked out. The icon-nulling gate
-    // was removed, so patching leaves Codex's native (new-style) indicator
-    // expressions untouched and its own supports(model, tier) guard decides where
-    // the icon renders.
+    // Third-party catalogs may not meet Codex's native power-selection threshold.
+    // Codey still uses the modern trigger, whose Fast indicator is filled, while
+    // model rows and model options remain free of speed-tier badges.
     const fastModelPresentationSource = [
       "const nativeModelPickerMarkers=[",
       "`composer.intelligenceDropdown.model.title`,",
       "`composer.intelligenceDropdown.model.rowLabel`];",
-      "function nativePicker(powerSelections,selectedServiceTierIconKind){",
+      "function triggerConfig(hideLabel,powerSelections){",
       "let workMode=true,compact=workMode&&powerSelections.length>=4,",
-      "useCompact=compact,selectedModel={},selectedServiceTier=`priority`;",
-      "let selectedIcon=selectedServiceTierIconKind!==null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
+      "configEnabled=compact&&!hideLabel,focusTarget=compact?`simple`:`advanced`;",
+      "return {focusTarget,modelPickerTriggerConfig:configEnabled?",
+      "{showFastServiceTierIndicator:true}:void 0}}",
+      "function unrelatedFastShapes(workMode,hideDecoy,compact,otherConfig){",
+      "let decoyEnabled=workMode&&!hideDecoy;",
+      "if(compact&&otherConfig!=null)return {decoyEnabled};return null}",
+      "function unrelatedIconShape(decoyIcon,model,tier){",
+      "let decoyResult=decoyIcon!=null&&supports(model,tier)?decoyIcon:null;",
+      "return decoyResult}",
+      "function nativePicker(input,powerSelections,selectedServiceTierIconKind){",
+      "let {modelPickerTriggerConfig:config}=input,workMode=true,",
+      "compact=workMode&&powerSelections.length>=4,useCompact=compact,",
+      "selectedModel={},selectedServiceTier=`priority`,otherConfig=null;",
+      "let selectedIcon=!useCompact&&selectedServiceTierIconKind!=null&&",
+      "supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
       "let rowIcon=selectedServiceTierIconKind!==null&&supports(selectedModel,selectedServiceTier)?selectedServiceTierIconKind:null;",
+      "let labels={selected:{serviceTierIconKind:selectedIcon},row:{serviceTierIconKind:rowIcon}};",
       "let options=[`gpt-5.5`,`claude-opus-4-8`].map(model=>({",
       "model,selectedServiceTierIconKind:useCompact?null:selectedServiceTierIconKind,stripGptPrefix:useCompact}));",
-      "return {options,rowIcon,selectedIcon}}",
+      "if(compact&&otherConfig!=null)return {kind:`decoy`};",
+      "if(compact&&config!=null)return {kind:`solid`,labels,options,rowIcon,selectedIcon};",
+      "return {kind:`outline`,labels,options,rowIcon,selectedIcon}}",
       "function supports(){return true}",
     ].join("");
     const patchedFastModelPresentation = await patchAsset(
       fastModelPresentationSource,
       "app://-/assets/codex-composer-adapter-DDUHejoe.js",
     );
-    // Icon expressions pass through unchanged — nothing is forced to null.
-    assert.equal(patchedFastModelPresentation, fastModelPresentationSource);
-    assert.doesNotMatch(patchedFastModelPresentation, /rowIcon=null/);
-    assert.doesNotMatch(patchedFastModelPresentation, /selectedIcon=null/);
-    assert.doesNotMatch(
+    assert.match(patchedFastModelPresentation, /configEnabled=!hideLabel/);
+    assert.match(patchedFastModelPresentation, /selectedIcon=null/);
+    assert.match(patchedFastModelPresentation, /rowIcon=null/);
+    assert.match(
       patchedFastModelPresentation,
       /selectedServiceTierIconKind:null,stripGptPrefix:/,
     );
+    assert.match(patchedFastModelPresentation, /if\(config!=null\)/);
+    assert.match(
+      patchedFastModelPresentation,
+      /if\(compact&&otherConfig!=null\)/,
+    );
+    assert.match(
+      patchedFastModelPresentation,
+      /decoyResult=decoyIcon!=null&&supports\(model,tier\)\?decoyIcon:null/,
+    );
     const nativeModelPicker = Function(
-      `${patchedFastModelPresentation};return {nativePicker};`,
+      `${patchedFastModelPresentation};return {nativePicker,triggerConfig};`,
     )();
-    // A Fast-capable model in the expanded picker keeps the native icon.
-    const expandedPresentation = nativeModelPicker.nativePicker([], "fast");
-    assert.equal(expandedPresentation.rowIcon, "fast");
-    assert.equal(expandedPresentation.selectedIcon, "fast");
-    assert.ok(expandedPresentation.options.every(
-      (option) => option.selectedServiceTierIconKind === "fast",
+    const thirdPartyTrigger = nativeModelPicker.triggerConfig(false, []);
+    const thirdPartyPresentation = nativeModelPicker.nativePicker(
+      {
+        modelPickerTriggerConfig:
+          thirdPartyTrigger.modelPickerTriggerConfig,
+      },
+      [],
+      "fast",
+    );
+    assert.ok(thirdPartyTrigger.modelPickerTriggerConfig);
+    assert.equal(thirdPartyPresentation.kind, "solid");
+    assert.equal(thirdPartyPresentation.rowIcon, null);
+    assert.equal(thirdPartyPresentation.selectedIcon, null);
+    assert.ok(thirdPartyPresentation.options.every(
+      (option) => option.selectedServiceTierIconKind === null,
     ));
+    assert.equal(
+      nativeModelPicker.triggerConfig(true, []).modelPickerTriggerConfig,
+      undefined,
+    );
 
     for (const url of [
       "app://-/assets/app-initial.js",

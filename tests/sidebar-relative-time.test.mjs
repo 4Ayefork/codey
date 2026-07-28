@@ -17,8 +17,26 @@ class FakeElement {
   }
 
   appendChild(child) {
+    if (child.parentElement) {
+      child.parentElement.children = child.parentElement.children.filter(
+        (candidate) => candidate !== child,
+      );
+    }
     child.parentElement = this;
     this.children.push(child);
+    return child;
+  }
+
+  insertBefore(child, reference) {
+    if (child.parentElement) {
+      child.parentElement.children = child.parentElement.children.filter(
+        (candidate) => candidate !== child,
+      );
+    }
+    const referenceIndex = this.children.indexOf(reference);
+    if (referenceIndex < 0) return this.appendChild(child);
+    child.parentElement = this;
+    this.children.splice(referenceIndex, 0, child);
     return child;
   }
 
@@ -146,6 +164,15 @@ test("renders an accessible time element in the thread row content", () => {
   const row = new FakeElement();
   const content = new FakeElement();
   content.className = "flex h-full w-full items-center";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  const nativeActionSpacer = new FakeElement();
+  nativeActionSpacer.className = "shrink-0";
+  content.appendChild(titleRegion);
+  content.appendChild(nativeStatusRail);
+  content.appendChild(nativeActionSpacer);
   row.appendChild(content);
   const timestamp = Date.now() - 2 * 24 * 60 * 60_000;
 
@@ -158,6 +185,10 @@ test("renders an accessible time element in the thread row content", () => {
   assert.match(label.getAttribute("datetime"), /^\d{4}-\d{2}-\d{2}T/);
   assert.match(label.getAttribute("aria-label"), /^最后消息：2 天/);
   assert.match(label.title, /^最后消息：/);
+  assert.deepEqual(
+    content.children,
+    [titleRegion, label, nativeStatusRail, nativeActionSpacer],
+  );
 
   const attributeWrites = label.attributeWrites;
   window.__codeyUpdateThreadUpdatedAt(row, timestamp);
@@ -165,6 +196,41 @@ test("renders an accessible time element in the thread row content", () => {
 
   window.__codeyUpdateThreadUpdatedAt(row, 0);
   assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
+});
+
+test("moves a previously appended time before the native trailing rail", () => {
+  const { window } = loadInjection();
+  const row = new FakeElement();
+  const content = new FakeElement();
+  content.className = "flex h-full w-full items-center text-sm leading-4";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  const nativeActionSpacer = new FakeElement();
+  nativeActionSpacer.className = "shrink-0";
+  const misplacedLabel = new FakeElement("time");
+  misplacedLabel.setAttribute("data-codey-thread-updated-at", "true");
+  const duplicateLabel = new FakeElement("time");
+  duplicateLabel.setAttribute("data-codey-thread-updated-at", "true");
+  content.appendChild(titleRegion);
+  content.appendChild(nativeStatusRail);
+  content.appendChild(nativeActionSpacer);
+  content.appendChild(misplacedLabel);
+  content.appendChild(duplicateLabel);
+  row.appendChild(content);
+
+  window.__codeyUpdateThreadUpdatedAt(row, Date.now() - 12 * 60_000);
+
+  assert.deepEqual(
+    content.children,
+    [titleRegion, misplacedLabel, nativeStatusRail, nativeActionSpacer],
+  );
+  assert.equal(
+    content.querySelectorAll("[data-codey-thread-updated-at]").length,
+    1,
+  );
+  assert.equal(duplicateLabel.parentElement, null);
 });
 
 test("batches visible thread timestamps through the bridge and renders the result", async () => {
@@ -205,9 +271,7 @@ test("batches visible thread timestamps through the bridge and renders the resul
 test("injects time styles that coexist with native statuses and yield to sidebar actions", () => {
   assert.match(source, /threadUpdatedAtAttribute = "data-codey-thread-updated-at"/);
   assert.match(source, /font-variant-numeric: tabular-nums/);
-  assert.doesNotMatch(
-    source,
-    /sidebar-thread-row\]:has\(\[data-hover-card-open-immediately\]\[class\*="group-hover:hidden"\]\) \[\$\{threadUpdatedAtAttribute\}\] \{ display: none; \}/,
-  );
+  assert.match(source, /placeThreadUpdatedAt\(row, label\)/);
+  assert.match(source, /mount\.insertBefore\(label, before\)/);
   assert.match(source, /sidebar-thread-row\]:hover \[\$\{threadUpdatedAtAttribute\}\].*opacity: 0/s);
 });

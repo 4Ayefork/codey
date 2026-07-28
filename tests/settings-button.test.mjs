@@ -18,6 +18,7 @@ class FakeElement {
     this.top = top;
     this.style = {};
     this.textContent = "";
+    this.attributes = new Map();
     this.visible = visible;
     this.isConnected = false;
     this.rectReads = 0;
@@ -102,7 +103,18 @@ class FakeElement {
     this.isConnected = false;
   }
 
-  setAttribute() {}
+  getAttribute(name) {
+    return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+    if (name === "id") this.id = String(value);
+  }
 }
 
 test("moves the Codey button beside the visible header's trailing action region", () => {
@@ -162,6 +174,115 @@ test("moves the Codey button beside the visible header's trailing action region"
   assert.equal(codeyButton.dataset.codeyHeaderActions, "true");
   assert.equal(hiddenHeader.children.includes(codeyButton), false);
   assert.deepEqual(visibleHeader.children, [codeyButton, rightRegion]);
+});
+
+test("marks the Codey button when a silent update check finds a new version", async () => {
+  const visibleHeader = new FakeElement("header", { right: 1200 });
+  const documentElement = new FakeElement("html");
+  const elementsById = new Map();
+  let nextTimerId = 1;
+  const timers = [];
+  const events = [];
+  const activeTimers = () => timers.filter((timer) => !timer.cleared);
+  const visibleButton = () =>
+    elementsById.get("codey-settings-button") || null;
+  const document = {
+    body: new FakeElement("body"),
+    documentElement,
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      let id = element.id;
+      Object.defineProperty(element, "id", {
+        configurable: true,
+        get: () => id,
+        set: (value) => {
+          id = String(value);
+          if (id) elementsById.set(id, element);
+        },
+      });
+      const originalSetAttribute = element.setAttribute.bind(element);
+      element.setAttribute = (name, value) => {
+        originalSetAttribute(name, value);
+        if (name === "id") elementsById.set(String(value), element);
+      };
+      return element;
+    },
+    getElementById: (id) =>
+      id === "codey-settings-button"
+        ? visibleButton()
+        : elementsById.get(id) || null,
+    querySelector: () => null,
+    querySelectorAll: (selector) =>
+      selector === "header" ? [visibleHeader] : [],
+  };
+  const window = {
+    __codexSessionDeleteBridge: async (path) => {
+      assert.equal(path, "/api/check_for_updates");
+      return {
+        currentVersion: "0.3.9",
+        latestVersion: "0.4.0",
+        updateAvailable: true,
+        selectedAsset: { fileName: "Codey-0.4.0.zip" },
+      };
+    },
+    addEventListener() {},
+    alert() {
+      throw new Error("silent update check must not alert");
+    },
+    clearTimeout(id) {
+      const timer = timers.find((entry) => entry.id === id);
+      if (timer) timer.cleared = true;
+    },
+    dispatchEvent(event) {
+      events.push(event);
+      return true;
+    },
+    getComputedStyle: () => ({ display: "flex", visibility: "visible" }),
+    innerWidth: 1200,
+    localStorage: { getItem: () => null, key: () => null, length: 0, setItem() {} },
+    setTimeout(callback, delay) {
+      const timer = { id: nextTimerId, callback, delay, cleared: false };
+      nextTimerId += 1;
+      timers.push(timer);
+      return timer.id;
+    },
+  };
+  window.window = window;
+
+  vm.runInNewContext(source, {
+    console,
+    CustomEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    },
+    document,
+    HTMLElement: FakeElement,
+    location: { pathname: "/", search: "" },
+    MutationObserver: class {
+      observe() {}
+    },
+    URLSearchParams,
+    window,
+  });
+
+  const initialTimer = activeTimers().find((timer) => timer.delay === 0);
+  assert.equal(initialTimer?.delay, 0);
+  initialTimer.cleared = true;
+  initialTimer.callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  const button = visibleButton();
+  assert.ok(button);
+  assert.equal(button.getAttribute("data-codey-update-available"), "true");
+  assert.equal(button.getAttribute("aria-label"), "打开 Codey 配置，有可用更新");
+  assert.equal(window.__codeyUpdateAvailability.latestVersion, "0.4.0");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "codey-update-availability-changed");
+  assert.equal(
+    activeTimers().some((timer) => timer.delay === 30 * 60 * 1000),
+    false,
+  );
 });
 
 test("ignores sidebar nav and main content until top chrome is available", () => {

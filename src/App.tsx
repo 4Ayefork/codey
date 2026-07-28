@@ -56,6 +56,15 @@ const Check = IconCheck;
 const X = IconX;
 const INJECTION_STATUS_CHANGED_EVENT = "codey-injection-status-changed";
 const SETTINGS_OPENED_EVENT = "codey-settings-opened";
+const UPDATE_AVAILABLE_EVENT = "codey-update-availability-changed";
+const AUTO_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+const AUTO_UPDATE_CHECK_TIMEOUT_MS = 12_000;
+
+declare global {
+  interface Window {
+    __codeyUpdateAvailability?: UpdateCheck | null;
+  }
+}
 
 function CodeyBrandMark() {
   return (
@@ -83,6 +92,32 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const supportsModel = (models: string[], expected: string) =>
   models.some((model) => model.trim().toLowerCase() === expected);
+const updateAvailable = (
+  check: UpdateCheck | null | undefined,
+): check is UpdateCheck => check?.updateAvailable === true;
+
+function updateCheckText(result: UpdateCheck) {
+  return result.updateAvailable
+    ? result.selectedAsset
+      ? `发现 v${result.latestVersion} 更新（当前 v${result.currentVersion}）`
+      : `发现 v${result.latestVersion} 更新，但当前系统暂无可安装包`
+    : `当前已是最新版本 v${result.currentVersion}`;
+}
+
+function updateResultTone(result: UpdateCheck): InlineResult["tone"] {
+  return result.updateAvailable && !result.selectedAsset
+    ? "error"
+    : "success";
+}
+
+function publishUpdateAvailability(result: UpdateCheck | null) {
+  window.__codeyUpdateAvailability = updateAvailable(result) ? result : null;
+  window.dispatchEvent(
+    new CustomEvent(UPDATE_AVAILABLE_EVENT, {
+      detail: window.__codeyUpdateAvailability,
+    }),
+  );
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -167,6 +202,8 @@ export function App({ embedded = false, onClose }: AppProps) {
   const [traceSnapshotStale, setTraceSnapshotStale] = useState(false);
   const injectionStatusRefreshRef = useRef<Promise<RuntimeStatus> | null>(null);
   const settingsOpenRefreshRequestedRef = useRef(false);
+  const updateCheckRef = useRef<UpdateCheck | null>(null);
+  const autoUpdateCheckInFlightRef = useRef(false);
 
   const provider = ccSwitchStatus?.provider;
   const officialSlugs = useMemo(
@@ -183,6 +220,11 @@ export function App({ embedded = false, onClose }: AppProps) {
       : modelState.upstreamModels;
   }, [modelQuery, modelState.upstreamModels]);
   const isBusy = busy !== null;
+  const configLoaded = config !== null;
+
+  useEffect(() => {
+    updateCheckRef.current = updateCheck;
+  }, [updateCheck]);
 
   useEffect(() => {
     const handleInjectionStatusChanged = () => {
@@ -212,8 +254,90 @@ export function App({ embedded = false, onClose }: AppProps) {
   }, []);
 
   useEffect(() => {
+    const applyDetectedUpdate = (
+      result: UpdateCheck | null | undefined,
+    ) => {
+      if (!updateAvailable(result)) return;
+      setUpdateCheck(result);
+      setDownloadedUpdate(null);
+      setUpdateResult({
+        tone: updateResultTone(result),
+        text: updateCheckText(result),
+      });
+    };
+
+    applyDetectedUpdate(window.__codeyUpdateAvailability);
+    const handleUpdateAvailabilityChanged = (event: Event) => {
+      applyDetectedUpdate((event as CustomEvent<UpdateCheck | null>).detail);
+    };
+    window.addEventListener(
+      UPDATE_AVAILABLE_EVENT,
+      handleUpdateAvailabilityChanged,
+    );
+    return () => {
+      window.removeEventListener(
+        UPDATE_AVAILABLE_EVENT,
+        handleUpdateAvailabilityChanged,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (embedded || !configLoaded) return;
+    let cancelled = false;
+    let timer = 0;
+
+    const shouldPause = () =>
+      updateAvailable(updateCheckRef.current) ||
+      updateAvailable(window.__codeyUpdateAvailability);
+
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = 0;
+        void checkForUpdatesSilently();
+      }, AUTO_UPDATE_CHECK_INTERVAL_MS);
+    };
+
+    const checkForUpdatesSilently = async () => {
+      if (cancelled || shouldPause() || autoUpdateCheckInFlightRef.current)
+        return;
+      autoUpdateCheckInFlightRef.current = true;
+      try {
+        const result = await withTimeout(
+          invoke<UpdateCheck>("check_for_updates"),
+          AUTO_UPDATE_CHECK_TIMEOUT_MS,
+          "检查更新超时",
+        );
+        if (cancelled) return;
+        if (result.updateAvailable) {
+          setUpdateCheck(result);
+          setDownloadedUpdate(null);
+          setUpdateResult({
+            tone: updateResultTone(result),
+            text: updateCheckText(result),
+          });
+          publishUpdateAvailability(result);
+          return;
+        }
+      } catch {
+        // 后台更新检测保持静默；手动检查仍会展示具体错误。
+      } finally {
+        autoUpdateCheckInFlightRef.current = false;
+        if (!cancelled && !shouldPause()) schedule();
+      }
+    };
+
+    void checkForUpdatesSilently();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [configLoaded, embedded]);
 
   useEffect(() => {
     if (!status.traceLogStats?.pending) return;
@@ -693,14 +817,10 @@ export function App({ embedded = false, onClose }: AppProps) {
         "检查更新超时，请检查网络",
       );
       setUpdateCheck(result);
-      const text = result.updateAvailable
-        ? result.selectedAsset
-          ? `发现 v${result.latestVersion} 更新（当前 v${result.currentVersion}）`
-          : `发现 v${result.latestVersion} 更新，但当前系统暂无可安装包`
-        : `当前已是最新版本 v${result.currentVersion}`;
+      publishUpdateAvailability(result);
+      const text = updateCheckText(result);
       setUpdateResult({
-        tone:
-          result.updateAvailable && !result.selectedAsset ? "error" : "success",
+        tone: updateResultTone(result),
         text,
       });
       setNotice({

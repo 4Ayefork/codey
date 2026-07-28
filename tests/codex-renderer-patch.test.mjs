@@ -59,7 +59,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
           remote_compaction_v2: false,
         }),
       ),
-      "codey-startup-patch-installed-v17",
+      "codey-startup-patch-installed-v18",
     );
     const electron = Module._load("electron", undefined, false);
     const upstreamHandler = async () =>

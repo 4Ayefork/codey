@@ -737,6 +737,7 @@ function AppUpdateCardComponent({
   onDownloadUpdate,
   onInstallUpdate,
 }: AppUpdateCardProps) {
+  const hasUpdate = updateCheck?.updateAvailable === true;
   return (
     <section className="secondary-section" aria-labelledby="update-title">
       <div className="section-title compact">
@@ -748,8 +749,18 @@ function AppUpdateCardComponent({
       <Card className="secondary-card update-card">
         <div className="update-card-header">
           <div className="update-card-title">
-            <span className="column-icon">
+            <span
+              className={`column-icon update-card-icon ${
+                hasUpdate ? "has-update" : ""
+              }`}
+            >
               <RefreshCw size={16} />
+              {hasUpdate && (
+                <span
+                  className="update-notification-dot"
+                  aria-hidden="true"
+                />
+              )}
             </span>
             <div>
               <strong>应用更新</strong>
@@ -759,10 +770,8 @@ function AppUpdateCardComponent({
               </small>
             </div>
           </div>
-          <Badge
-            variant={updateCheck?.updateAvailable ? "warning" : "secondary"}
-          >
-            {updateCheck?.updateAvailable ? "发现新版本" : "已是最新"}
+          <Badge variant={hasUpdate ? "warning" : "secondary"}>
+            {hasUpdate ? "发现新版本" : "已是最新"}
           </Badge>
         </div>
 

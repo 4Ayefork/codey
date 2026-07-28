@@ -737,21 +737,48 @@
     return `${Math.max(1, Math.floor(days / 365))} 年`;
   };
 
-  const threadUpdatedAtMount = (row) => {
+  const threadUpdatedAtPlacement = (row, label) => {
     const contentRoot = [...(row.children || [])].find((child) => (
       String(child.className || "").includes("h-full w-full items-center")
     ));
-    if (contentRoot) return contentRoot;
+    if (contentRoot) {
+      const children = [...(contentRoot.children || [])].filter((child) => child !== label);
+      const mainContentIndex = children.findIndex((child) => {
+        const className = String(child.className || "");
+        return className.includes("min-w-0") && className.includes("flex-1");
+      });
+      return {
+        before: mainContentIndex >= 0 ? children[mainContentIndex + 1] || null : null,
+        mount: contentRoot,
+      };
+    }
     const titleNode = row.querySelector?.(
       "[data-thread-title], [data-app-action-sidebar-thread-title], .truncate.select-none, .truncate.text-base",
     );
-    return titleNode?.parentElement || row;
+    return { before: null, mount: titleNode?.parentElement || row };
+  };
+
+  const placeThreadUpdatedAt = (row, label) => {
+    const { before, mount } = threadUpdatedAtPlacement(row, label);
+    if (!(mount instanceof HTMLElement)) return;
+    const children = [...(mount.children || [])];
+    const labelIndex = children.indexOf(label);
+    if (before instanceof HTMLElement) {
+      const beforeIndex = children.indexOf(before);
+      if (label.parentElement !== mount || labelIndex !== beforeIndex - 1) {
+        mount.insertBefore(label, before);
+      }
+    } else if (label.parentElement !== mount || labelIndex !== children.length - 1) {
+      mount.appendChild(label);
+    }
   };
 
   const updateThreadUpdatedAt = (row, timestampMs) => {
     if (!(row instanceof HTMLElement)) return;
     const timestamp = numericThreadTimestamp(timestampMs);
-    let label = row.querySelector?.(`[${threadUpdatedAtAttribute}]`);
+    const labels = [...(row.querySelectorAll?.(`[${threadUpdatedAtAttribute}]`) || [])];
+    let label = labels.shift() || null;
+    labels.forEach((duplicate) => duplicate.remove());
     if (!timestamp) {
       label?.remove();
       return;
@@ -759,8 +786,11 @@
     if (!(label instanceof HTMLElement)) {
       label = document.createElement("time");
       label.setAttribute(threadUpdatedAtAttribute, "true");
-      threadUpdatedAtMount(row)?.appendChild(label);
     }
+    // Codex reserves the native status/action rail with trailing siblings and
+    // absolutely positioned icons. Keep the time immediately after the flexible
+    // title region so it stays before that rail instead of covering its icons.
+    placeThreadUpdatedAt(row, label);
     const relative = formatRelativeThreadTime(timestamp);
     const timestampText = String(timestamp);
     if (

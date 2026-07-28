@@ -1516,6 +1516,21 @@ input:focus-visible,
   gap: 10px;
 }
 
+.update-card-icon {
+  position: relative;
+}
+
+.update-notification-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--mac-red);
+  box-shadow: 0 0 0 2px #f2f2f7;
+}
+
 .update-card-title strong {
   display: block;
   font-size: 13px;
