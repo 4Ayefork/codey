@@ -272,6 +272,7 @@ fn read_official_entries(home: &Path) -> Result<Vec<Value>> {
 
 fn read_official_entries_uncached(paths: &[PathBuf]) -> Result<Vec<Value>> {
     let mut catalogs = Vec::new();
+    let mut bundled_fast_model_slugs = HashSet::new();
     let mut has_native_cache = false;
     let mut last_error = None;
     for (index, path) in paths.iter().enumerate() {
@@ -299,6 +300,12 @@ fn read_official_entries_uncached(paths: &[PathBuf]) -> Result<Vec<Value>> {
     if let Some(value) = codey_runtime_core::model_suffix::bundled_model_catalog() {
         let models = official_models_from_value(&value);
         if !models.is_empty() {
+            bundled_fast_model_slugs.extend(models.iter().filter_map(|model| {
+                declares_fast_speed_support(model)
+                    .then(|| model.get("slug").and_then(Value::as_str))
+                    .flatten()
+                    .map(ToString::to_string)
+            }));
             catalogs.insert(if has_native_cache { 1 } else { 0 }, models);
         }
     }
@@ -320,6 +327,9 @@ fn read_official_entries_uncached(paths: &[PathBuf]) -> Result<Vec<Value>> {
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("Codex 模型模板缺少固定官方模型 {slug}"))?;
             normalize_official_model(&mut model, slug, display_name, priority);
+            if bundled_fast_model_slugs.contains(*slug) {
+                add_fast_speed_controls(&mut model);
+            }
             Ok(model)
         })
         .collect()
@@ -627,6 +637,20 @@ mod tests {
         .unwrap();
     }
 
+    fn write_cache_without_fast_metadata(home: &Path) {
+        let mut cache = official_cache();
+        for model in cache["models"].as_array_mut().unwrap() {
+            let object = model.as_object_mut().unwrap();
+            object.remove("service_tiers");
+            object.remove("additional_speed_tiers");
+        }
+        fs::write(
+            home.join("models_cache.json"),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn assert_native_fast(model: &Value) {
         assert!(
             model["service_tiers"]
@@ -713,6 +737,38 @@ mod tests {
                 "gpt-5.4",
             ]
         );
+    }
+
+    #[test]
+    fn native_cache_without_fast_metadata_inherits_bundled_official_capabilities() {
+        let home = tempfile::tempdir().unwrap();
+        write_cache_without_fast_metadata(home.path());
+
+        refresh_for_provider(home.path(), true, None, &[]).unwrap();
+
+        let catalog: Value = serde_json::from_slice(
+            &fs::read(home.path().join(MODEL_CATALOG_RELATIVE_PATH)).unwrap(),
+        )
+        .unwrap();
+        let models = catalog["models"].as_array().unwrap();
+        assert_eq!(
+            models
+                .iter()
+                .filter(|model| declares_fast_speed_support(model))
+                .map(|model| model["slug"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+            ]
+        );
+        for slug in ["gpt-5.4-mini", "gpt-5.3-codex-spark"] {
+            let model = models.iter().find(|model| model["slug"] == slug).unwrap();
+            assert_no_native_fast(model);
+        }
     }
 
     #[test]
