@@ -38,6 +38,7 @@ pub const CODEX_APP_NOT_FOUND_ERROR: &str = "找不到 Codex App，请在 Codey 
 pub const CODEX_APP_PATH_INVALID_ERROR: &str = "配置的 Codex App 路径无效或指向了 Codex CLI；请选择 Codex 桌面 App，不要选择 codex.exe 命令行程序";
 const DISABLE_GPU_ARGUMENT: &str = "--disable-gpu";
 const DISABLE_GPU_RASTERIZATION_ARGUMENT: &str = "--disable-gpu-rasterization";
+const DEFAULT_CHINESE_LOCALE_ARGUMENT: &str = "--lang=zh-CN";
 
 #[cfg(windows)]
 pub fn needs_codex_app_path_selection(startup_error: Option<&str>) -> bool {
@@ -746,7 +747,7 @@ async fn spawn_codex(
         fast_codex_startup,
         experimental_features,
     };
-    let gpu_arguments = gpu_launch_arguments(gpu_launch_mode, !cfg!(target_os = "macos"));
+    let runtime_arguments = codex_runtime_arguments(gpu_launch_mode, !cfg!(target_os = "macos"));
 
     #[cfg(windows)]
     {
@@ -754,7 +755,7 @@ async fn spawn_codex(
             .context("为 Codex 启动补丁选择本地调试端口失败")?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
         let mut launch_arguments = vec![inspector_arg];
-        launch_arguments.extend(gpu_arguments);
+        launch_arguments.extend(runtime_arguments);
         let mut spawned = spawn_windows_codex(app_dir, debug_port, &launch_arguments).await?;
         match crate::codex_startup_patch::install(inspector_port, patch_options).await {
             Ok(()) => {
@@ -776,7 +777,7 @@ async fn spawn_codex(
             .context("为 macOS Codex 启动补丁选择本地调试端口失败")?;
         let inspector_arg = crate::codex_startup_patch::inspector_argument(inspector_port);
         let mut launch_arguments = vec![inspector_arg.clone()];
-        launch_arguments.extend(gpu_arguments);
+        launch_arguments.extend(runtime_arguments);
         let command = if app_dir.extension().and_then(|value| value.to_str()) == Some("app") {
             build_fresh_macos_open_command(app_dir, debug_port, &launch_arguments)
         } else {
@@ -817,7 +818,7 @@ async fn spawn_codex(
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let command = build_codex_command(app_dir, debug_port, &gpu_arguments);
+        let command = build_codex_command(app_dir, debug_port, &runtime_arguments);
         let mut spawned = spawn_command(command)?;
         spawned.performance_status = "ready".to_string();
         spawned.performance_detail = if disable_codex_pet {
@@ -843,6 +844,18 @@ fn gpu_launch_arguments(gpu_launch_mode: GpuLaunchMode, enabled_for_platform: bo
             vec![DISABLE_GPU_RASTERIZATION_ARGUMENT.to_string()]
         }
     }
+}
+
+fn codex_runtime_arguments(
+    gpu_launch_mode: GpuLaunchMode,
+    gpu_arguments_enabled_for_platform: bool,
+) -> Vec<String> {
+    let mut arguments = vec![DEFAULT_CHINESE_LOCALE_ARGUMENT.to_string()];
+    arguments.extend(gpu_launch_arguments(
+        gpu_launch_mode,
+        gpu_arguments_enabled_for_platform,
+    ));
+    arguments
 }
 
 async fn prepare_codex_for_launch(app_dir: &std::path::Path) -> Result<()> {
@@ -1267,6 +1280,21 @@ mod gpu_launch_argument_tests {
         );
         assert!(gpu_launch_arguments(GpuLaunchMode::DisableGpu, false).is_empty());
         assert!(gpu_launch_arguments(GpuLaunchMode::DisableGpuRasterization, false).is_empty());
+    }
+
+    #[test]
+    fn runtime_arguments_set_chinese_before_the_renderer_starts() {
+        assert_eq!(
+            codex_runtime_arguments(GpuLaunchMode::Off, true),
+            vec![DEFAULT_CHINESE_LOCALE_ARGUMENT.to_string()]
+        );
+        assert_eq!(
+            codex_runtime_arguments(GpuLaunchMode::DisableGpu, true),
+            vec![
+                DEFAULT_CHINESE_LOCALE_ARGUMENT.to_string(),
+                DISABLE_GPU_ARGUMENT.to_string(),
+            ]
+        );
     }
 }
 

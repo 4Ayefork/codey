@@ -47,7 +47,11 @@ test("GPU launch modes are mutually exclusive, opt-in, and persisted", async () 
   );
   assert.match(
     launcherSource,
-    /let gpu_arguments = gpu_launch_arguments\([\s\S]{0,300}!cfg!\(target_os = "macos"\)/,
+    /let runtime_arguments = codex_runtime_arguments\([\s\S]{0,300}!cfg!\(target_os = "macos"\)/,
+  );
+  assert.match(
+    launcherSource,
+    /const DEFAULT_CHINESE_LOCALE_ARGUMENT: &str = "--lang=zh-CN"/,
   );
   assert.doesNotMatch(launcherSource, /--disable-gpu-sandbox/);
   assert.doesNotMatch(launcherSource, /--disable-hardware-acceleration/);

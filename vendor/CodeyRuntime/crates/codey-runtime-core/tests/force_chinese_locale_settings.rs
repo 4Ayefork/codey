@@ -87,6 +87,8 @@ fn injection_script_includes_force_chinese_locale_global_and_patch() {
     assert!(script.contains("\"get-setting\""));
     assert!(script.contains("\"set-setting\""));
     assert!(script.contains("{ key: \"localeOverride\", value: locale }"));
+    assert!(script.contains("body: JSON.stringify(params)"));
+    assert!(!script.contains("body: JSON.stringify({ params })"));
     assert!(script.contains("window.location.reload()"));
     assert!(script.contains("codey.forceChineseLocale.managed.v1"));
     assert!(!script.contains("setItem(\"localeOverride\""));

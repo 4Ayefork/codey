@@ -124,6 +124,42 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
     );
     assert.doesNotMatch(patchedStatsigSource, /i\.initializeAsync\(\)\.catch/);
 
+    const localeSource = [
+      "function resolveLocale(a,bp,Au){",
+      "const dynamicConfigId=`72216192`,enableI18n=`enable_i18n`;",
+      "let o=a?.get(enableI18n,!1);",
+      "let s=o,c=a?.get(`locale_source`,`IDE`),l=bp(Au.localeOverride);",
+      "return {enabled:s,source:c,locale:l}}",
+    ].join("");
+    electron.protocol.handle("app", async () => new Response(localeSource));
+    const localeResponse = await installedHandler({
+      url: "app://-/assets/app-initial-BHB6SClA.js",
+    });
+    const patchedLocaleSource = await localeResponse.text();
+    assert.match(
+      patchedLocaleSource,
+      /__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__=!0/,
+    );
+    assert.doesNotMatch(
+      patchedLocaleSource,
+      /let s=o,c=a\?\.get\(`locale_source`,`IDE`\),l=bp\(Au\.localeOverride\)/,
+    );
+    delete globalThis.__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__;
+    const resolveLocale = Function(`${patchedLocaleSource};return resolveLocale`)();
+    assert.deepEqual(
+      resolveLocale(
+        { get: () => false },
+        () => "en-US",
+        { localeOverride: {} },
+      ),
+      { enabled: true, source: "SYSTEM", locale: "zh-CN" },
+    );
+    assert.equal(
+      globalThis.__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__,
+      true,
+    );
+    delete globalThis.__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__;
+
     const interactionPerformanceSource = [
       "Hcn=class{activeInteractions=new Map;beginCpuSampling;",
       "start(e,n,u){let d={activeKey:e,",

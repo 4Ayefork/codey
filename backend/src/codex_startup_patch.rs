@@ -82,6 +82,30 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const patchCodexRendererAsset = (source) => {
     let patched = source;
     if (
+      source.includes("72216192") &&
+      source.includes("enable_i18n") &&
+      source.includes("locale_source") &&
+      source.includes(".localeOverride")
+    ) {
+      // Resolve the locale before React's first i18n render. The later CDP
+      // injection still persists localeOverride, but it can arrive after the
+      // first route has already selected and cached English messages.
+      patched = replaceUniqueRendererGate(
+        patched,
+        /let\s+([$A-Z_a-z][$\w]*)\s*=\s*([$A-Z_a-z][$\w]*)\s*,\s*([$A-Z_a-z][$\w]*)\s*=\s*([$A-Z_a-z][$\w]*)\?\.\s*get\(\s*`locale_source`\s*,\s*`IDE`\s*\)\s*,\s*([$A-Z_a-z][$\w]*)\s*=\s*([$A-Z_a-z][$\w]*)\(\s*([$A-Z_a-z][$\w]*)\.localeOverride\s*\)/g,
+        (
+          _match,
+          i18nEnabledName,
+          _i18nGateValueName,
+          localeSourceName,
+          _dynamicConfigName,
+          localeOverrideName,
+        ) =>
+          `let ${i18nEnabledName}=(globalThis.__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__=!0),${localeSourceName}=\`SYSTEM\`,${localeOverrideName}=\`zh-CN\``,
+        "default Chinese locale",
+      );
+    }
+    if (
       source.includes("useHiddenModels:") &&
       source.includes("availableModels:") &&
       source.includes("includeUltraReasoningEffort") &&
@@ -1618,6 +1642,8 @@ mod tests {
         assert!(expression.contains("const fastCodexStartup = true"));
         assert!(expression.contains("Codey Statsig bootstrap timeout"));
         assert!(expression.contains("statsigBootstrapTimeoutMs = 1500"));
+        assert!(expression.contains("default Chinese locale"));
+        assert!(expression.contains("__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__"));
     }
 
     #[test]

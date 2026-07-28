@@ -78,12 +78,21 @@ test("renderer core defaults Codex locale to Chinese before remote config settle
   assert.match(inject, /defineNavigatorGetter\(target, "languages", defaultChineseLanguages\)/);
   assert.match(inject, /key: "localeOverride"/);
   assert.match(inject, /value: defaultChineseLocale/);
+  assert.match(inject, /body: JSON\.stringify\(params\)/);
+  assert.doesNotMatch(inject, /body: JSON\.stringify\(\{ params \}\)/);
   assert.match(inject, /enable_i18n: true/);
   assert.match(inject, /locale_source: "SYSTEM"/);
   assert.match(inject, /name === statsigI18nDynamicConfigId/);
   assert.match(inject, /Object\.defineProperty\(window, "__STATSIG__"/);
   assert.match(inject, /patchStatsigClients\(\)/);
   assert.match(inject, /scanStatsigUntilReady/);
+  assert.match(inject, /const retryDelays = \[0, 250, 750, 1500, 3000, 5000\]/);
+  assert.match(inject, /verification\?\.value !== defaultChineseLocale/);
+  assert.match(inject, /existing\.ensureSynced\?\.\(\)/);
+  assert.match(
+    inject,
+    /globalThis\.__CODEY_DEFAULT_CHINESE_LOCALE_RENDERER_PATCH__ === true/,
+  );
 });
 
 test("plugin bridge fast-paths unrelated IPC payloads without a DOM observer", async () => {
