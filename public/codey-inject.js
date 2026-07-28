@@ -74,6 +74,7 @@
     "[data-app-action-sidebar-thread-row]",
     "[data-app-action-sidebar-project-row]",
   ].join(", ");
+  const sidebarThreadRowSelector = "[data-app-action-sidebar-thread-row]";
   const deletedSidebarSessionTtlMs = 10 * 60 * 1000;
   const fallbackSessionExportMaxBytes = 64 * 1024 * 1024;
   const queryWithin = (root, selector) => {
@@ -747,15 +748,71 @@
         const className = String(child.className || "");
         return className.includes("min-w-0") && className.includes("flex-1");
       });
+      const trailing = mainContentIndex >= 0 ? children.slice(mainContentIndex + 1) : [];
       return {
         before: mainContentIndex >= 0 ? children[mainContentIndex + 1] || null : null,
         mount: contentRoot,
+        statusRail: trailing[0] || null,
+        trailing,
       };
     }
     const titleNode = row.querySelector?.(
       "[data-thread-title], [data-app-action-sidebar-thread-title], .truncate.select-none, .truncate.text-base",
     );
-    return { before: null, mount: titleNode?.parentElement || row };
+    return { before: null, mount: titleNode?.parentElement || row, statusRail: null, trailing: [] };
+  };
+
+  const hasNativeThreadStatus = (row, label) => {
+    if (nativeReactThreadStatusVisible(row)) return true;
+    const { trailing } = threadUpdatedAtPlacement(row, label);
+    const candidates = (trailing || []).filter((child) => (
+      child instanceof HTMLElement
+      && child !== label
+      && !child.hasAttribute?.(threadUpdatedAtAttribute)
+    ));
+    for (const [index, candidate] of candidates.entries()) {
+      if (
+        index === 0
+        && [...(candidate.children || [])].some((child) => (
+          child instanceof HTMLElement
+          && child !== label
+          && !child.hasAttribute?.(threadUpdatedAtAttribute)
+        ))
+      ) return true;
+      if (nativeElementLooksLikeThreadStatus(candidate)) return true;
+    }
+    return false;
+  };
+
+  const nativeReactThreadStatusVisible = (row) => {
+    if (!(row instanceof HTMLElement)) return false;
+    // Codex owns the canonical loading/unread flags even when its status icon
+    // is moved or updated without adding a new element to the trailing rail.
+    const fiberKey = Object.keys(row).find((key) => key.startsWith("__reactFiber$"));
+    let fiber = fiberKey ? row[fiberKey] : null;
+    for (let depth = 0; fiber && depth < 12; depth += 1, fiber = fiber.return) {
+      const statusState = fiber.memoizedProps?.statusState || fiber.pendingProps?.statusState;
+      if (!statusState || typeof statusState !== "object") continue;
+      const type = String(statusState.type || "");
+      return statusState.unread === true || /^(?:loading|processing|running|working)$/i.test(type);
+    }
+    return false;
+  };
+
+  const nativeElementLooksLikeThreadStatus = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.matches?.("button, [role=button], [role=menuitem]")) return false;
+    if (String(element.textContent || "").trim()) return true;
+    const statusText = [
+      element.getAttribute?.("aria-label") || "",
+      element.getAttribute?.("role") || "",
+      element.getAttribute?.("title") || "",
+      element.title || "",
+    ].join(" ");
+    if (/(running|completed|complete|done|status|运行|进行|完成|状态)/i.test(statusText)) return true;
+    const className = String(element.className || "");
+    if (/\b(?:animate-|rounded-full|bg-blue|text-blue|circle|spinner)\b/i.test(className)) return true;
+    return [...(element.children || [])].some((child) => nativeElementLooksLikeThreadStatus(child));
   };
 
   const placeThreadUpdatedAt = (row, label) => {
@@ -780,6 +837,10 @@
     let label = labels.shift() || null;
     labels.forEach((duplicate) => duplicate.remove());
     if (!timestamp) {
+      label?.remove();
+      return;
+    }
+    if (hasNativeThreadStatus(row, label)) {
       label?.remove();
       return;
     }
@@ -1721,6 +1782,7 @@
   window.__codeyThreadTimestampMsFromPayload = threadTimestampMsFromPayload;
   window.__codeyUpdateThreadUpdatedAt = updateThreadUpdatedAt;
   window.__codeyInstallThreadUpdatedTimes = installThreadUpdatedTimes;
+  window.__codeyHasNativeThreadStatus = hasNativeThreadStatus;
   window.__codeyRefreshRecentLocalSessions = refreshRecentLocalSessions;
   window.__codeyExportSession = exportSession;
   window.__codeyImportSessionFile = importSessionFile;
@@ -1825,7 +1887,13 @@
         : mutation.target?.parentElement;
       if (mutation.type === "attributes") {
         if (target && !isCodeyOwned(target)) {
-          addPendingScanRoot(nearestScanRoot(target));
+          const threadRow = target.closest?.(sidebarThreadRowSelector) || null;
+          if (
+            threadRow
+            || (mutation.attributeName !== "class" && mutation.attributeName !== "style")
+          ) {
+            addPendingScanRoot(threadRow || nearestScanRoot(target));
+          }
         }
         continue;
       }
@@ -1848,12 +1916,26 @@
           }
           continue;
         }
-        if (isCodeyOwned(element) || !containsRelevantElement(element)) continue;
+        if (isCodeyOwned(element)) continue;
+        const threadRow = element.closest?.(sidebarThreadRowSelector)
+          || target?.closest?.(sidebarThreadRowSelector)
+          || null;
+        if (threadRow) {
+          addPendingScanRoot(threadRow);
+          continue;
+        }
+        if (!containsRelevantElement(element)) continue;
         addPendingScanRoot(nearestScanRoot(element));
       }
       for (const node of mutation.removedNodes || []) {
         const element = node instanceof HTMLElement ? node : null;
-        if (!element || !containsRelevantElement(element)) continue;
+        if (!element) continue;
+        const threadRow = target?.closest?.(sidebarThreadRowSelector) || null;
+        if (threadRow && !isCodeyOwned(target)) {
+          addPendingScanRoot(threadRow);
+          continue;
+        }
+        if (!containsRelevantElement(element)) continue;
         if (target && !isCodeyOwned(target)) addPendingScanRoot(nearestScanRoot(target));
       }
     }
@@ -1872,6 +1954,8 @@
       "data-app-action-sidebar-project-row",
       "data-testid",
       "disabled",
+      "class",
+      "style",
     ],
     childList: true,
     subtree: true,

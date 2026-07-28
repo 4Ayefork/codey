@@ -11,6 +11,7 @@ class FakeElement {
     this.children = [];
     this.className = "";
     this.parentElement = null;
+    this.tagName = String(tagName).toUpperCase();
     this.textContent = "";
     this.title = "";
     this.attributeWrites = 0;
@@ -49,6 +50,9 @@ class FakeElement {
   }
 
   matches(selector) {
+    if (/^[a-z]+$/i.test(selector)) return this.tagName.toLowerCase() === selector.toLowerCase();
+    const classContains = selector.match(/^\[class\*=(['"]?)([^\]'"]+)\1\]$/)?.[2];
+    if (classContains) return String(this.className || "").includes(classContains);
     const attribute = selector.match(/^\[([^\]]+)\]$/)?.[1];
     return attribute ? this.hasAttribute(attribute) : false;
   }
@@ -198,6 +202,137 @@ test("renders an accessible time element in the thread row content", () => {
   assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
 });
 
+test("hides thread time while the native status rail is occupied", () => {
+  const { window } = loadInjection();
+  const row = new FakeElement();
+  const content = new FakeElement();
+  content.className = "flex h-full w-full items-center";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  const runningStatus = new FakeElement();
+  runningStatus.className = "animate-spin rounded-full";
+  const nativeActionSpacer = new FakeElement();
+  nativeActionSpacer.className = "shrink-0";
+  content.appendChild(titleRegion);
+  nativeStatusRail.appendChild(runningStatus);
+  content.appendChild(nativeStatusRail);
+  content.appendChild(nativeActionSpacer);
+  row.appendChild(content);
+  const timestamp = Date.now() - 5 * 60_000;
+
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
+
+  runningStatus.remove();
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+
+  const label = content.querySelector("[data-codey-thread-updated-at]");
+  assert.ok(label);
+  assert.equal(label.textContent, "5 分");
+  assert.deepEqual(
+    content.children,
+    [titleRegion, label, nativeStatusRail, nativeActionSpacer],
+  );
+});
+
+test("hides thread time from Codex React loading and unread status state", () => {
+  const { window } = loadInjection();
+  const row = new FakeElement();
+  const content = new FakeElement();
+  content.className = "flex h-full w-full items-center";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  content.appendChild(titleRegion);
+  content.appendChild(nativeStatusRail);
+  row.appendChild(content);
+  const timestamp = Date.now() - 6 * 60_000;
+  const statusFiber = {
+    memoizedProps: { statusState: { type: "loading", unread: false } },
+    return: null,
+  };
+  row.__reactFiber$test = { memoizedProps: {}, return: statusFiber };
+
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
+
+  statusFiber.memoizedProps.statusState = { type: undefined, unread: true };
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
+
+  statusFiber.memoizedProps.statusState = { type: undefined, unread: false };
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]")?.textContent, "6 分");
+});
+
+test("removes an existing thread time when a native status appears later", async () => {
+  const timestamp = Date.now() - 2 * 60_000;
+  const row = new FakeElement();
+  row.setAttribute("data-app-action-sidebar-thread-row", "");
+  row.setAttribute("data-app-action-sidebar-thread-id", "local:thread-1");
+  row.setAttribute("data-app-action-sidebar-thread-title", "增加文本清洗 key 配置");
+  const content = new FakeElement();
+  content.className = "flex h-full w-full items-center";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  const nativeActionSpacer = new FakeElement();
+  nativeActionSpacer.className = "shrink-0";
+  content.appendChild(titleRegion);
+  content.appendChild(nativeStatusRail);
+  content.appendChild(nativeActionSpacer);
+  row.appendChild(content);
+
+  const { window } = loadInjection({
+    rows: [row],
+    bridgeHandler: async () => ({
+      status: "ok",
+      sort_keys: [{ session_id: "thread-1", recency_at_ms: timestamp }],
+    }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]")?.textContent, "2 分");
+
+  const completedStatus = new FakeElement();
+  completedStatus.className = "rounded-full bg-blue-500";
+  nativeStatusRail.appendChild(completedStatus);
+  window.__codeyInstallThreadUpdatedTimes(row);
+
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]"), null);
+});
+
+test("does not treat trailing action icons as native thread status", () => {
+  const { window } = loadInjection();
+  const row = new FakeElement();
+  const content = new FakeElement();
+  content.className = "flex h-full w-full items-center";
+  const titleRegion = new FakeElement();
+  titleRegion.className = "flex min-w-0 flex-1 items-center gap-2";
+  const nativeStatusRail = new FakeElement();
+  nativeStatusRail.className = "ml-[3px] flex items-center justify-end gap-1";
+  const nativeActionSpacer = new FakeElement();
+  nativeActionSpacer.className = "shrink-0";
+  const actionButton = new FakeElement("button");
+  const actionIcon = new FakeElement("svg");
+  actionButton.appendChild(actionIcon);
+  nativeActionSpacer.appendChild(actionButton);
+  content.appendChild(titleRegion);
+  content.appendChild(nativeStatusRail);
+  content.appendChild(nativeActionSpacer);
+  row.appendChild(content);
+  const timestamp = Date.now() - 9 * 60_000;
+
+  window.__codeyUpdateThreadUpdatedAt(row, timestamp);
+
+  assert.equal(content.querySelector("[data-codey-thread-updated-at]")?.textContent, "9 分");
+});
+
 test("moves a previously appended time before the native trailing rail", () => {
   const { window } = loadInjection();
   const row = new FakeElement();
@@ -273,5 +408,6 @@ test("injects time styles that coexist with native statuses and yield to sidebar
   assert.match(source, /font-variant-numeric: tabular-nums/);
   assert.match(source, /placeThreadUpdatedAt\(row, label\)/);
   assert.match(source, /mount\.insertBefore\(label, before\)/);
+  assert.match(source, /"class",\s*"style",/);
   assert.match(source, /sidebar-thread-row\]:hover \[\$\{threadUpdatedAtAttribute\}\].*opacity: 0/s);
 });
