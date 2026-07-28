@@ -10,8 +10,16 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { invoke } from "./api";
-import { formatBytes, TraceLogModule, type TraceLogStats } from "./TraceLogModule";
-import { CodexAppPathDialog, ConfirmationDialog, ModelPickerDialog } from "./AppDialogs";
+import {
+  formatBytes,
+  TraceLogModule,
+  type TraceLogStats,
+} from "./TraceLogModule";
+import {
+  CodexAppPathDialog,
+  ConfirmationDialog,
+  ModelPickerDialog,
+} from "./AppDialogs";
 import {
   AppUpdateCard,
   ExperimentalFeaturesCard,
@@ -40,10 +48,16 @@ import { Badge, Button, Button as SaveButton } from "./components/semi";
 const Check = IconCheck;
 const X = IconX;
 const INJECTION_STATUS_CHANGED_EVENT = "codey-injection-status-changed";
+const SETTINGS_OPENED_EVENT = "codey-settings-opened";
 
 function CodeyBrandMark() {
   return (
-    <svg className="config-brand-mark" viewBox="0 0 350 350" aria-hidden="true" focusable="false">
+    <svg
+      className="config-brand-mark"
+      viewBox="0 0 350 350"
+      aria-hidden="true"
+      focusable="false"
+    >
       <rect x="0" y="0" width="350" height="350" rx="34" fill="#fff" />
       <path
         d="M70 301c-16 0-24-18-13-30l73-77c8-8 8-20 0-28L65 101C50 86 57 61 78 57c9-2 18 1 25 8l91 91c18 18 18 46 0 64l-66 66c-6 6-2 15 7 15h183"
@@ -58,21 +72,31 @@ function CodeyBrandMark() {
 }
 
 const SUBAGENT_MODEL = "gpt-5.6-luna";
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
-const supportsModel = (models: string[], expected: string) => models.some(
-  (model) => model.trim().toLowerCase() === expected,
-);
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+const supportsModel = (models: string[], expected: string) =>
+  models.some((model) => model.trim().toLowerCase() === expected);
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then((value) => {
-      window.clearTimeout(timer);
-      resolve(value);
-    }, (error) => {
-      window.clearTimeout(timer);
-      reject(error);
-    });
+    const timer = window.setTimeout(
+      () => reject(new Error(message)),
+      timeoutMs,
+    );
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -82,7 +106,9 @@ export function App({ embedded = false, onClose }: AppProps) {
   const [status, setStatus] = useState<RuntimeStatus>({ running: false });
   const [pluginMarketplaceStatus, setPluginMarketplaceStatus] =
     useState<PluginMarketplaceStatus | null>(null);
-  const [ccSwitchStatus, setCcSwitchStatus] = useState<CcSwitchStatus | null>(null);
+  const [ccSwitchStatus, setCcSwitchStatus] = useState<CcSwitchStatus | null>(
+    null,
+  );
   const [modelState, setModelState] = useState<ModelState>({
     officialModels: [],
     officialModelIds: [],
@@ -93,34 +119,47 @@ export function App({ embedded = false, onClose }: AppProps) {
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
   const [draftModels, setDraftModels] = useState<string[]>([]);
-  const [notice, setNotice] = useState<Notice>({ tone: "info", text: "正在连接 Codey…" });
+  const [notice, setNotice] = useState<Notice>({
+    tone: "info",
+    text: "正在连接 Codey…",
+  });
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [webhookResult, setWebhookResult] = useState<InlineResult>({ tone: "idle", text: "" });
-  const [updateResult, setUpdateResult] = useState<InlineResult>({ tone: "idle", text: "" });
+  const [webhookResult, setWebhookResult] = useState<InlineResult>({
+    tone: "idle",
+    text: "",
+  });
+  const [updateResult, setUpdateResult] = useState<InlineResult>({
+    tone: "idle",
+    text: "",
+  });
   const [updateCheck, setUpdateCheck] = useState<UpdateCheck | null>(null);
-  const [downloadedUpdate, setDownloadedUpdate] = useState<UpdateDownload | null>(null);
+  const [downloadedUpdate, setDownloadedUpdate] =
+    useState<UpdateDownload | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
-  const [codexAppPathDialogVisible, setCodexAppPathDialogVisible] = useState(false);
+  const [codexAppPathDialogVisible, setCodexAppPathDialogVisible] =
+    useState(false);
   const [selectedCodexAppPath, setSelectedCodexAppPath] = useState("");
   const [codexAppPathError, setCodexAppPathError] = useState("");
-  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(
+    null,
+  );
   const [traceSnapshotStale, setTraceSnapshotStale] = useState(false);
   const injectionStatusRefreshRef = useRef<Promise<RuntimeStatus> | null>(null);
+  const settingsOpenRefreshRequestedRef = useRef(false);
 
   const provider = ccSwitchStatus?.provider;
   const officialSlugs = useMemo(
     () => new Set(modelState.officialModelIds),
     [modelState.officialModelIds],
   );
-  const draftModelSet = useMemo(
-    () => new Set(draftModels),
-    [draftModels],
-  );
+  const draftModelSet = useMemo(() => new Set(draftModels), [draftModels]);
   const filteredUpstreamModels = useMemo(() => {
     const query = modelQuery.trim().toLowerCase();
     return query
-      ? modelState.upstreamModels.filter((model) => model.toLowerCase().includes(query))
+      ? modelState.upstreamModels.filter((model) =>
+          model.toLowerCase().includes(query),
+        )
       : modelState.upstreamModels;
   }, [modelQuery, modelState.upstreamModels]);
   const isBusy = busy !== null;
@@ -129,9 +168,26 @@ export function App({ embedded = false, onClose }: AppProps) {
     const handleInjectionStatusChanged = () => {
       void refreshInjectionStatus().catch(() => {});
     };
-    window.addEventListener(INJECTION_STATUS_CHANGED_EVENT, handleInjectionStatusChanged);
+    window.addEventListener(
+      INJECTION_STATUS_CHANGED_EVENT,
+      handleInjectionStatusChanged,
+    );
     return () => {
-      window.removeEventListener(INJECTION_STATUS_CHANGED_EVENT, handleInjectionStatusChanged);
+      window.removeEventListener(
+        INJECTION_STATUS_CHANGED_EVENT,
+        handleInjectionStatusChanged,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSettingsOpened = () => {
+      settingsOpenRefreshRequestedRef.current = true;
+      void refreshInjectionStatus().catch(() => {});
+    };
+    window.addEventListener(SETTINGS_OPENED_EVENT, handleSettingsOpened);
+    return () => {
+      window.removeEventListener(SETTINGS_OPENED_EVENT, handleSettingsOpened);
     };
   }, []);
 
@@ -202,12 +258,18 @@ export function App({ embedded = false, onClose }: AppProps) {
       setPersistedConfig(result.config);
       setCcSwitchStatus(result.ccSwitch ?? null);
       if (result.modelState) setModelState(result.modelState);
+      const shouldRefreshInjectionStatus =
+        !embedded || !settingsOpenRefreshRequestedRef.current;
       const [next] = await Promise.all([
-        refreshInjectionStatus(),
+        shouldRefreshInjectionStatus
+          ? refreshInjectionStatus()
+          : refreshStatus(),
         refreshPluginMarketplaceStatus(),
       ]);
       const startupError = next.startupError || result.startupError;
-      setCodexAppPathDialogVisible(Boolean(result.codexAppPathSelectionRequired));
+      setCodexAppPathDialogVisible(
+        Boolean(result.codexAppPathSelectionRequired),
+      );
       if (startupError) {
         setNotice({ tone: "error", text: `自动启动失败：${startupError}` });
       } else if (next.restartRequired) {
@@ -232,7 +294,8 @@ export function App({ embedded = false, onClose }: AppProps) {
   }
 
   function refreshInjectionStatus() {
-    if (injectionStatusRefreshRef.current) return injectionStatusRefreshRef.current;
+    if (injectionStatusRefreshRef.current)
+      return injectionStatusRefreshRef.current;
     const refresh = invoke("refresh_injection_status")
       .then(() => refreshStatus())
       .finally(() => {
@@ -246,7 +309,9 @@ export function App({ embedded = false, onClose }: AppProps) {
 
   async function refreshPluginMarketplaceStatus() {
     try {
-      const next = await invoke<PluginMarketplaceStatus>("plugin_marketplace_status");
+      const next = await invoke<PluginMarketplaceStatus>(
+        "plugin_marketplace_status",
+      );
       setPluginMarketplaceStatus(next);
       return next;
     } catch (error) {
@@ -271,9 +336,9 @@ export function App({ embedded = false, onClose }: AppProps) {
   }
 
   function setSubagentOptimization(enabled: boolean) {
-    setConfig((current) => current
-      ? { ...current, subagentOptimization: enabled }
-      : current);
+    setConfig((current) =>
+      current ? { ...current, subagentOptimization: enabled } : current,
+    );
     setDirty(true);
   }
 
@@ -291,13 +356,18 @@ export function App({ embedded = false, onClose }: AppProps) {
       restartRequired?: boolean;
     }>("save_codey_config", { config: next });
     setPersistedConfig(result.config);
-    window.dispatchEvent(new CustomEvent("codey:config-changed", {
-      detail: { config: result.config },
-    }));
+    window.dispatchEvent(
+      new CustomEvent("codey:config-changed", {
+        detail: { config: result.config },
+      }),
+    );
     if (result.ccSwitch) setCcSwitchStatus(result.ccSwitch);
     if (result.modelState) setModelState(result.modelState);
     if (typeof result.restartRequired === "boolean") {
-      setStatus((current) => ({ ...current, restartRequired: result.restartRequired }));
+      setStatus((current) => ({
+        ...current,
+        restartRequired: result.restartRequired,
+      }));
     }
     setDirty(false);
     return result;
@@ -308,7 +378,9 @@ export function App({ embedded = false, onClose }: AppProps) {
     setBusy("pick-codex-app-directory");
     setCodexAppPathError("");
     try {
-      const result = await invoke<CodexAppDirectorySelection>("pick_codex_app_directory");
+      const result = await invoke<CodexAppDirectorySelection>(
+        "pick_codex_app_directory",
+      );
       if (result.status === "selected" && result.path) {
         setSelectedCodexAppPath(result.path);
       }
@@ -336,7 +408,10 @@ export function App({ embedded = false, onClose }: AppProps) {
       await refreshStatus();
       setCodexAppPathDialogVisible(false);
       setSelectedCodexAppPath("");
-      setNotice({ tone: "success", text: "Codex 应用路径已校验并保存，客户端已启动" });
+      setNotice({
+        tone: "success",
+        text: "Codex 应用路径已校验并保存，客户端已启动",
+      });
     } catch (error) {
       setCodexAppPathError(errorText(error));
     } finally {
@@ -425,13 +500,18 @@ export function App({ embedded = false, onClose }: AppProps) {
     if (!provider || provider.official) return;
     await runOperation("fetch-models", async () => {
       const result = await withTimeout(
-        invoke<{ modelState: ModelState; restartRequired?: boolean }>("fetch_current_provider_models"),
+        invoke<{ modelState: ModelState; restartRequired?: boolean }>(
+          "fetch_current_provider_models",
+        ),
         15_000,
         "获取上游模型超时，请检查当前线路",
       );
       setModelState(result.modelState);
       if (typeof result.restartRequired === "boolean") {
-        setStatus((current) => ({ ...current, restartRequired: result.restartRequired }));
+        setStatus((current) => ({
+          ...current,
+          restartRequired: result.restartRequired,
+        }));
       }
       setDraftModels(result.modelState.thirdPartyModels);
       setModelQuery("");
@@ -445,7 +525,10 @@ export function App({ embedded = false, onClose }: AppProps) {
       return;
     }
     if (!provider) {
-      setNotice({ tone: "error", text: "当前线路尚未就绪，无法校验子代理模型" });
+      setNotice({
+        tone: "error",
+        text: "当前线路尚未就绪，无法校验子代理模型",
+      });
       return;
     }
     await runOperation("check-subagent-model", async () => {
@@ -467,11 +550,16 @@ export function App({ embedded = false, onClose }: AppProps) {
             "获取上游模型超时，请检查当前线路",
           );
         } catch (error) {
-          throw new Error(`无法确认当前第三方 API 是否支持 ${SUBAGENT_MODEL}：${errorText(error)}`);
+          throw new Error(
+            `无法确认当前第三方 API 是否支持 ${SUBAGENT_MODEL}：${errorText(error)}`,
+          );
         }
         setModelState(result.modelState);
         if (typeof result.restartRequired === "boolean") {
-          setStatus((current) => ({ ...current, restartRequired: result.restartRequired }));
+          setStatus((current) => ({
+            ...current,
+            restartRequired: result.restartRequired,
+          }));
         }
         supported = supportsModel(result.models, SUBAGENT_MODEL);
       }
@@ -492,9 +580,13 @@ export function App({ embedded = false, onClose }: AppProps) {
   }
 
   function toggleDraftModel(model: string, checked: boolean) {
-    setDraftModels((current) => checked
-      ? current.includes(model) ? current : [...current, model]
-      : current.filter((item) => item !== model));
+    setDraftModels((current) =>
+      checked
+        ? current.includes(model)
+          ? current
+          : [...current, model]
+        : current.filter((item) => item !== model),
+    );
   }
 
   async function saveModelSelection() {
@@ -554,7 +646,10 @@ export function App({ embedded = false, onClose }: AppProps) {
         12_000,
         "飞书测试在 12 秒内没有完成，请检查 Webhook 地址和网络",
       );
-      setWebhookResult({ tone: "success", text: "测试卡片已发送，三种会话状态通知已开启" });
+      setWebhookResult({
+        tone: "success",
+        text: "测试卡片已发送，三种会话状态通知已开启",
+      });
       setNotice({ tone: "success", text: "飞书机器人连接成功" });
     } catch (error) {
       const text = errorText(error);
@@ -583,9 +678,18 @@ export function App({ embedded = false, onClose }: AppProps) {
           ? `发现 v${result.latestVersion} 更新（当前 v${result.currentVersion}）`
           : `发现 v${result.latestVersion} 更新，但当前系统暂无可安装包`
         : `当前已是最新版本 v${result.currentVersion}`;
-      setUpdateResult({ tone: result.updateAvailable && !result.selectedAsset ? "error" : "success", text });
+      setUpdateResult({
+        tone:
+          result.updateAvailable && !result.selectedAsset ? "error" : "success",
+        text,
+      });
       setNotice({
-        tone: result.updateAvailable && result.selectedAsset ? "info" : result.updateAvailable ? "error" : "success",
+        tone:
+          result.updateAvailable && result.selectedAsset
+            ? "info"
+            : result.updateAvailable
+              ? "error"
+              : "success",
         text,
       });
     } catch (error) {
@@ -598,7 +702,13 @@ export function App({ embedded = false, onClose }: AppProps) {
   }
 
   async function downloadUpdate() {
-    if (!config || isBusy || !updateCheck?.updateAvailable || !updateCheck.selectedAsset) return;
+    if (
+      !config ||
+      isBusy ||
+      !updateCheck?.updateAvailable ||
+      !updateCheck.selectedAsset
+    )
+      return;
     setBusy("download-update");
     setDownloadedUpdate(null);
     setUpdateResult({ tone: "pending", text: "正在下载并校验更新…" });
@@ -637,7 +747,9 @@ export function App({ embedded = false, onClose }: AppProps) {
     setBusy("install-update");
     setUpdateResult({ tone: "pending", text: "正在启动安装器…" });
     try {
-      await invoke("install_downloaded_update", { filePath: downloadedUpdate.filePath });
+      await invoke("install_downloaded_update", {
+        filePath: downloadedUpdate.filePath,
+      });
       const text = "正在退出 Codey 并启动安装器…";
       setUpdateResult({ tone: "pending", text });
       setNotice({ tone: "info", text });
@@ -653,7 +765,8 @@ export function App({ embedded = false, onClose }: AppProps) {
     setConfirmation({
       action: "clear",
       title: "清理 Codex 日志库？",
-      description: "将清空并压缩 logs_*.sqlite，只删除本地诊断/Trace 日志，不影响聊天历史、账号、配置或插件。清理后的诊断记录无法恢复。",
+      description:
+        "将清空并压缩 logs_*.sqlite，只删除本地诊断/Trace 日志，不影响聊天历史、账号、配置或插件。清理后的诊断记录无法恢复。",
       confirmLabel: "确认清理",
       run: () => void clearTraceLogs(),
     });
@@ -663,7 +776,8 @@ export function App({ embedded = false, onClose }: AppProps) {
     setConfirmation({
       action: "restart",
       title: "重启 Codex？",
-      description: "当前 Codex 客户端将被关闭并由 Codey 自动重新拉起，正在执行的本地任务会被中断。",
+      description:
+        "当前 Codex 客户端将被关闭并由 Codey 自动重新拉起，正在执行的本地任务会被中断。",
       confirmLabel: "重启 Codex",
       run: () => void restartCodex(),
     });
@@ -696,9 +810,10 @@ export function App({ embedded = false, onClose }: AppProps) {
       if (result.status === "ready") {
         setNotice({
           tone: "success",
-          text: result.configChanged || result.initializedRemote
-            ? "插件市场已修复并立即生效，无需重启 Codex"
-            : "插件市场状态正常，无需修改",
+          text:
+            result.configChanged || result.initializedRemote
+              ? "插件市场已修复并立即生效，无需重启 Codex"
+              : "插件市场状态正常，无需修改",
         });
         return;
       }
@@ -737,7 +852,10 @@ export function App({ embedded = false, onClose }: AppProps) {
         status: "ok" | "pending";
         traceLogStats: TraceLogStats;
       }>("refresh_trace_log_stats");
-      setStatus((current) => ({ ...current, traceLogStats: result.traceLogStats }));
+      setStatus((current) => ({
+        ...current,
+        traceLogStats: result.traceLogStats,
+      }));
       if (result.status === "pending") {
         setNotice({ tone: "info", text: "Trace 日志正在统计，请稍候" });
         return;
@@ -750,29 +868,55 @@ export function App({ embedded = false, onClose }: AppProps) {
   if (!config || !provider) {
     return (
       <main className="app-shell loading-shell">
-        <div className="loading-mark"><GitBranch size={17} /></div>
+        <div className="loading-mark">
+          <GitBranch size={17} />
+        </div>
         <div>
           <strong>正在载入 Codey</strong>
           <p>{notice.text}</p>
         </div>
-        <LoaderCircle className="spinner loading-spinner" size={16} aria-hidden="true" />
+        <LoaderCircle
+          className="spinner loading-spinner"
+          size={16}
+          aria-hidden="true"
+        />
       </main>
     );
   }
 
   return (
-    <main className={`app-shell${embedded ? " embedded" : ""}`} ref={setPortalContainer}>
-      <a className="skip-link" href="#codey-settings-content">跳至设置内容</a>
+    <main
+      className={`app-shell${embedded ? " embedded" : ""}`}
+      ref={setPortalContainer}
+    >
+      <a className="skip-link" href="#codey-settings-content">
+        跳至设置内容
+      </a>
 
       <div className="macos-titlebar">
         <div className="macos-traffic-lights">
-          <button className="traffic-light close" title="关闭" onClick={embedded ? closeSettings : undefined} aria-label="关闭窗口" />
-          <button className="traffic-light minimize" title="最小化" aria-label="最小化窗口" />
-          <button className="traffic-light zoom" title="缩放" aria-label="全屏缩放" />
+          <button
+            className="traffic-light close"
+            title="关闭"
+            onClick={embedded ? closeSettings : undefined}
+            aria-label="关闭窗口"
+          />
+          <button
+            className="traffic-light minimize"
+            title="最小化"
+            aria-label="最小化窗口"
+          />
+          <button
+            className="traffic-light zoom"
+            title="缩放"
+            aria-label="全屏缩放"
+          />
         </div>
         <div className="macos-titlebar-title">
           <span className="app-title-text">Codey Control Panel</span>
-          <span className="app-version-tag">v{status.appVersion || "0.2.0"}</span>
+          <span className="app-version-tag">
+            v{status.appVersion || "0.2.0"}
+          </span>
         </div>
         <div className="macos-titlebar-right" aria-hidden="true" />
       </div>
@@ -801,11 +945,13 @@ export function App({ embedded = false, onClose }: AppProps) {
                 disabled={!dirty || isBusy}
                 onClick={() => void saveCurrent()}
               >
-                {busy === "save"
-                  ? <LoaderCircle className="spinner" aria-hidden="true" />
-                  : dirty
-                    ? <Save aria-hidden="true" />
-                    : <Check aria-hidden="true" />}
+                {busy === "save" ? (
+                  <LoaderCircle className="spinner" aria-hidden="true" />
+                ) : dirty ? (
+                  <Save aria-hidden="true" />
+                ) : (
+                  <Check aria-hidden="true" />
+                )}
                 {dirty ? "保存更改" : "已保存"}
               </SaveButton>
             </div>
@@ -844,6 +990,7 @@ export function App({ embedded = false, onClose }: AppProps) {
 
               <ExperimentalFeaturesCard
                 config={config}
+                status={status}
                 busy={busy}
                 isBusy={isBusy}
                 onConfigChange={editConfig}
@@ -869,7 +1016,9 @@ export function App({ embedded = false, onClose }: AppProps) {
                 isBusy={isBusy}
                 subagentModel={SUBAGENT_MODEL}
                 onConfigChange={editConfig}
-                onSubagentOptimizationChange={(checked) => void updateSubagentOptimization(checked)}
+                onSubagentOptimizationChange={(checked) =>
+                  void updateSubagentOptimization(checked)
+                }
               />
             </div>
           </div>
@@ -906,12 +1055,18 @@ export function App({ embedded = false, onClose }: AppProps) {
       </div>
 
       {notice.text && (
-        <div className={`notice-toast ${notice.tone}`} role="status" aria-live="polite">
-          {notice.tone === "success"
-            ? <CircleCheck size={17} />
-            : notice.tone === "error"
-              ? <CircleAlert size={17} />
-              : <Activity size={17} />}
+        <div
+          className={`notice-toast ${notice.tone}`}
+          role="status"
+          aria-live="polite"
+        >
+          {notice.tone === "success" ? (
+            <CircleCheck size={17} />
+          ) : notice.tone === "error" ? (
+            <CircleAlert size={17} />
+          ) : (
+            <Activity size={17} />
+          )}
           <span>{notice.text}</span>
           <Button
             variant="ghost"

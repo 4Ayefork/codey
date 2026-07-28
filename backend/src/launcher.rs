@@ -80,6 +80,7 @@ pub struct CodeyRuntime {
     pub maintenance: MaintenanceStatus,
     pub applied_config: CodeyConfig,
     pub injection_statuses: Arc<RwLock<Arc<[cdp::InjectionScriptStatus]>>>,
+    pub experimental_feature_runtime: Arc<RwLock<cdp::ExperimentalFeatureRuntimeStatus>>,
     injection_scripts: cdp::PreparedInjectionScripts,
     injection_websocket_url: Arc<RwLock<Arc<str>>>,
     child: Arc<Mutex<Option<Child>>>,
@@ -106,10 +107,22 @@ impl CodeyRuntime {
                 self.injection_scripts
                     .statuses_with_error(format!("实时生效自检失败：{error:#}"))
             });
+        let experimental_feature_runtime = cdp::read_experimental_feature_runtime_status(
+            &websocket_url,
+            self.applied_config.experimental_features,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            cdp::ExperimentalFeatureRuntimeStatus::failed(
+                format!("试验性功能运行态自检失败：{error:#}"),
+                self.applied_config.experimental_features,
+            )
+        });
         if self.injection_websocket_url.read().await.as_ref() != websocket_url.as_ref() {
             return self.injection_statuses.read().await.clone();
         }
         *self.injection_statuses.write().await = statuses.clone();
+        *self.experimental_feature_runtime.write().await = experimental_feature_runtime;
         statuses
     }
 
@@ -360,12 +373,17 @@ impl CodeyRuntime {
             };
 
         let injection_statuses = Arc::new(RwLock::new(injected_target.injection_statuses()));
+        let experimental_feature_runtime = Arc::new(RwLock::new(
+            cdp::ExperimentalFeatureRuntimeStatus::pending(config.experimental_features),
+        ));
         let injection_websocket_url = Arc::new(RwLock::new(injected_target.websocket_url_arc()));
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         let watchdog_handler = handler.clone();
         let watchdog_debug_port = debug_port;
         let watchdog_injection_scripts = injection_scripts.clone();
         let watchdog_injection_statuses = injection_statuses.clone();
+        let watchdog_experimental_feature_runtime = experimental_feature_runtime.clone();
+        let watchdog_experimental_features = config.experimental_features;
         let watchdog_injection_websocket_url = injection_websocket_url.clone();
         let watchdog_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(CDP_WATCHDOG_INTERVAL);
@@ -404,6 +422,10 @@ impl CodeyRuntime {
                         let next_websocket_url = reinjected.websocket_url_arc();
                         let previous = std::mem::replace(&mut target, reinjected);
                         *watchdog_injection_statuses.write().await = next_statuses;
+                        *watchdog_experimental_feature_runtime.write().await =
+                            cdp::ExperimentalFeatureRuntimeStatus::pending(
+                                watchdog_experimental_features,
+                            );
                         *watchdog_injection_websocket_url.write().await = next_websocket_url;
                         previous.close().await;
                         consecutive_failures = 0;
@@ -411,6 +433,11 @@ impl CodeyRuntime {
                     Err(error) => {
                         *watchdog_injection_statuses.write().await = watchdog_injection_scripts
                             .statuses_with_error(format!("脚本重新注入失败：{error:#}"));
+                        *watchdog_experimental_feature_runtime.write().await =
+                            cdp::ExperimentalFeatureRuntimeStatus::failed(
+                                format!("脚本重新注入失败：{error:#}"),
+                                watchdog_experimental_features,
+                            );
                         eprintln!("Codey CDP bridge 恢复失败：{error:#}");
                         consecutive_failures = CDP_WATCHDOG_FAILURE_THRESHOLD.saturating_sub(1);
                     }
@@ -431,6 +458,7 @@ impl CodeyRuntime {
                 maintenance,
                 applied_config: config.clone(),
                 injection_statuses,
+                experimental_feature_runtime,
                 injection_scripts,
                 injection_websocket_url,
                 child,

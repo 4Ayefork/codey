@@ -51,6 +51,85 @@ pub struct InjectionScriptStatus {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExperimentalFeatureRuntimeStatus {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_features: Option<ExperimentalFeaturesConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_features: Option<ExperimentalFeaturesConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mismatched_features: Vec<String>,
+}
+
+impl ExperimentalFeatureRuntimeStatus {
+    pub fn pending(configured_features: ExperimentalFeaturesConfig) -> Self {
+        Self {
+            status: "unknown".to_string(),
+            detail: Some("打开配置面板时会读取一次试验性功能运行态".to_string()),
+            updated_at: None,
+            effective_features: None,
+            configured_features: Some(configured_features),
+            mismatched_features: Vec::new(),
+        }
+    }
+
+    pub fn failed(
+        detail: impl Into<String>,
+        configured_features: ExperimentalFeaturesConfig,
+    ) -> Self {
+        Self {
+            status: "error".to_string(),
+            detail: Some(detail.into()),
+            updated_at: None,
+            effective_features: None,
+            configured_features: Some(configured_features),
+            mismatched_features: Vec::new(),
+        }
+    }
+
+    fn reconciled(mut self, configured_features: ExperimentalFeaturesConfig) -> Self {
+        if self.configured_features.is_none() {
+            self.configured_features = Some(configured_features);
+        }
+        if let Some(effective_features) = self.effective_features {
+            self.mismatched_features =
+                experimental_feature_mismatches(configured_features, effective_features);
+            if self.mismatched_features.is_empty() {
+                self.status = "effective".to_string();
+                self.detail
+                    .get_or_insert_with(|| "运行态与已启动配置一致".to_string());
+            } else {
+                self.status = "mismatch".to_string();
+                self.detail
+                    .get_or_insert_with(|| "运行态与已启动配置不一致".to_string());
+            }
+        } else if !matches!(self.status.as_str(), "error" | "unknown") {
+            self.status = "unknown".to_string();
+        }
+        self
+    }
+}
+
+fn experimental_feature_mismatches(
+    configured_features: ExperimentalFeaturesConfig,
+    effective_features: ExperimentalFeaturesConfig,
+) -> Vec<String> {
+    let effective_overrides = effective_features.codex_feature_overrides();
+    configured_features
+        .codex_feature_overrides()
+        .into_iter()
+        .filter_map(|(flag, expected)| {
+            (effective_overrides.get(flag).copied() != Some(expected)).then(|| flag.to_string())
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct PreparedInjectionScripts {
     scripts: Arc<[String]>,
@@ -441,6 +520,24 @@ pub async fn read_injection_statuses(
     Ok(reconcile_injection_statuses(&scripts.descriptors, reported))
 }
 
+pub async fn read_experimental_feature_runtime_status(
+    websocket_url: &str,
+    configured_features: ExperimentalFeaturesConfig,
+) -> Result<ExperimentalFeatureRuntimeStatus> {
+    let response = codey_runtime_core::bridge::evaluate_script(
+        websocket_url,
+        experimental_feature_runtime_status_script(),
+    )
+    .await
+    .context("读取试验性功能运行态失败")?;
+    let payload = runtime_value(&response)
+        .and_then(serde_json::Value::as_str)
+        .context("试验性功能运行态未返回可解析结果")?;
+    let reported = serde_json::from_str::<ExperimentalFeatureRuntimeStatus>(payload)
+        .context("解析试验性功能运行态失败")?;
+    Ok(reported.reconciled(configured_features))
+}
+
 pub async fn read_official_experimental_features(
     websocket_url: &str,
 ) -> Result<ExperimentalFeaturesConfig> {
@@ -454,6 +551,19 @@ pub async fn read_official_experimental_features(
         .and_then(serde_json::Value::as_str)
         .context("Codex Statsig 尚未返回可解析的官方配置")?;
     serde_json::from_str(payload).context("解析 Codex 官方试验性功能配置失败")
+}
+
+fn experimental_feature_runtime_status_script() -> &'static str {
+    r#"(() => {
+  const snapshot = globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__;
+  if (!snapshot || typeof snapshot !== "object") {
+    return JSON.stringify({
+      status: "unknown",
+      detail: "Codex renderer 尚未命中试验性功能补丁；保存并重启 Codex 后再打开配置面板自检",
+    });
+  }
+  return JSON.stringify(snapshot);
+})()"#
 }
 
 fn official_experimental_features_script() -> &'static str {

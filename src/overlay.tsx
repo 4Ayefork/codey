@@ -5,6 +5,8 @@ import { App } from "./App";
 import appStyles from "./styles.css?inline";
 import overlayStyles from "./overlay.css?inline";
 
+const SETTINGS_OPENED_EVENT = "codey-settings-opened";
+
 type OverlayController = {
   open: () => void;
   close: () => void;
@@ -14,7 +16,10 @@ type OverlayController = {
 
 declare global {
   interface Window {
-    __codexSessionDeleteBridge?: (path: string, payload: unknown) => Promise<unknown>;
+    __codexSessionDeleteBridge?: (
+      path: string,
+      payload: unknown,
+    ) => Promise<unknown>;
     __codeySettingsOverlay?: OverlayController;
   }
 }
@@ -56,6 +61,7 @@ if (!window.__codeySettingsOverlay) {
   const open = () => {
     host.style.display = "block";
     host.setAttribute("aria-hidden", "false");
+    window.dispatchEvent(new CustomEvent(SETTINGS_OPENED_EVENT));
     requestAnimationFrame(() => dialog.focus({ preventScroll: true }));
   };
   const isOpen = () => host.style.display !== "none";

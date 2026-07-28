@@ -10,9 +10,10 @@ import "./styles.css";
 if (import.meta.env.DEV) {
   if (!window.__codeyInvokeApi) {
     console.log("[Dev Mode] Auto-injecting Codey Mock API");
-    const previewClientPlatform = new URLSearchParams(window.location.search).get("platform") === "windows"
-      ? "windows"
-      : "macos";
+    const previewClientPlatform =
+      new URLSearchParams(window.location.search).get("platform") === "windows"
+        ? "windows"
+        : "macos";
     let previewConfig = {
       activeProfileId: "primary",
       profiles: [
@@ -41,7 +42,9 @@ if (import.meta.env.DEV) {
       },
       codexAppPath: "/Applications/ChatGPT.app",
       userScripts: [],
-      selectedModelsByProvider: { primary: ["provider-fast-coder", "claude-sonnet-4-5"] },
+      selectedModelsByProvider: {
+        primary: ["provider-fast-coder", "claude-sonnet-4-5"],
+      },
       upstreamModelsByProvider: { primary: previewUpstreamModels },
       defaultModelByProvider: {},
       disableTraceLogWrites: true,
@@ -92,9 +95,14 @@ if (import.meta.env.DEV) {
       console.log(`[Mock API Call] ${command}`, args);
       // Wait a tiny bit to simulate network delay
       await new Promise((resolve) => setTimeout(resolve, 300));
-      
+
       if (command === "load_codey_config") {
-        return { config: previewConfig, modelState: previewModelState, startupError: undefined, ccSwitch: previewCcSwitch };
+        return {
+          config: previewConfig,
+          modelState: previewModelState,
+          startupError: undefined,
+          ccSwitch: previewCcSwitch,
+        };
       }
       if (command === "runtime_status") {
         return {
@@ -104,7 +112,10 @@ if (import.meta.env.DEV) {
           restartRequired: false,
           restartInProgress: false,
           activeProfileId: previewConfig.activeProfileId,
-          activeProfileName: previewConfig.profiles.find((p) => p.id === previewConfig.activeProfileId)?.name || "未命名代理",
+          activeProfileName:
+            previewConfig.profiles.find(
+              (p) => p.id === previewConfig.activeProfileId,
+            )?.name || "未命名代理",
           codexAppPath: previewConfig.codexAppPath,
           maintenance: {
             sessionStatus: "ready",
@@ -112,14 +123,40 @@ if (import.meta.env.DEV) {
             pluginStatus: "ready",
             pluginDetail: "Codex 插件已注入，且会话生命周期托管中",
             performanceStatus: "ready",
-            performanceDetail: previewClientPlatform === "windows"
-              ? "Windows 启动补丁已启用：WMI 周期采样、临时 WebView 残留和执行环境泄漏已修复"
-              : "启动补丁已启用：临时 WebView 和执行环境会自动回收",
+            performanceDetail:
+              previewClientPlatform === "windows"
+                ? "Windows 启动补丁已启用：WMI 周期采样、临时 WebView 残留和执行环境泄漏已修复"
+                : "启动补丁已启用：临时 WebView 和执行环境会自动回收",
+          },
+          experimentalFeatureRuntime: {
+            status: "effective",
+            detail: "运行态与当前页面配置一致",
+            updatedAt: Date.now(),
+            configuredFeatures: previewConfig.experimentalFeatures,
+            effectiveFeatures: previewConfig.experimentalFeatures,
           },
           injectionScripts: [
-            { id: "bridge-helpers", name: "桥接辅助", source: "builtin", status: "effective", detail: "桥接函数可调用" },
-            { id: "model-whitelist", name: "模型白名单", source: "builtin", status: "effective", detail: "模型目录已加载（5 个模型）" },
-            { id: "pet-control-shield", name: "宠物控制精简", source: "builtin", status: "effective", detail: "宠物控制精简已启用" },
+            {
+              id: "bridge-helpers",
+              name: "桥接辅助",
+              source: "builtin",
+              status: "effective",
+              detail: "桥接函数可调用",
+            },
+            {
+              id: "model-whitelist",
+              name: "模型白名单",
+              source: "builtin",
+              status: "effective",
+              detail: "模型目录已加载（5 个模型）",
+            },
+            {
+              id: "pet-control-shield",
+              name: "宠物控制精简",
+              source: "builtin",
+              status: "effective",
+              detail: "宠物控制精简已启用",
+            },
             {
               id: "voice-control-shield",
               name: "语音控制精简",
@@ -129,9 +166,27 @@ if (import.meta.env.DEV) {
                 ? "语音 UI 与资源拦截已启用"
                 : "控制器已就绪，当前精简策略关闭",
             },
-            { id: "security-warning-shield", name: "安全提示控制", source: "builtin", status: "effective", detail: "控制器已就绪，当前屏蔽策略关闭" },
-            { id: "settings-overlay-loader", name: "配置面板加载器", source: "builtin", status: "effective", detail: "配置面板按需加载器可用" },
-            { id: "renderer-controls", name: "渲染器控制", source: "builtin", status: "effective", detail: "渲染器控制与按需加载 API 可用" },
+            {
+              id: "security-warning-shield",
+              name: "安全提示控制",
+              source: "builtin",
+              status: "effective",
+              detail: "控制器已就绪，当前屏蔽策略关闭",
+            },
+            {
+              id: "settings-overlay-loader",
+              name: "配置面板加载器",
+              source: "builtin",
+              status: "effective",
+              detail: "配置面板按需加载器可用",
+            },
+            {
+              id: "renderer-controls",
+              name: "渲染器控制",
+              source: "builtin",
+              status: "effective",
+              detail: "渲染器控制与按需加载 API 可用",
+            },
             {
               id: "plugin-marketplace-compatibility",
               name: "插件市场兼容",
@@ -160,10 +215,18 @@ if (import.meta.env.DEV) {
         };
       }
       if (command === "sync_current_provider") {
-        return { config: previewConfig, modelState: previewModelState, ccSwitch: previewCcSwitch, restartRequired: false };
+        return {
+          config: previewConfig,
+          modelState: previewModelState,
+          ccSwitch: previewCcSwitch,
+          restartRequired: false,
+        };
       }
       if (command === "sync_official_experimental_features") {
-        return { status: "ok", experimentalFeatures: previewConfig.experimentalFeatures };
+        return {
+          status: "ok",
+          experimentalFeatures: previewConfig.experimentalFeatures,
+        };
       }
       if (command === "clear_codex_trace_logs") {
         return {
@@ -191,7 +254,13 @@ if (import.meta.env.DEV) {
         const requested = new Set(args.models as string[]);
         previewModelState = {
           ...previewModelState,
-          thirdPartyModels: previewUpstreamModels.filter((model) => requested.has(model) && !previewOfficialModels.some((official) => official.slug === model)),
+          thirdPartyModels: previewUpstreamModels.filter(
+            (model) =>
+              requested.has(model) &&
+              !previewOfficialModels.some(
+                (official) => official.slug === model,
+              ),
+          ),
         };
         return {
           status: "ok",
@@ -231,7 +300,8 @@ if (import.meta.env.DEV) {
             packageType: "app-zip",
             fileName: "Codey-0.2.0-macos-arm64-unsigned.zip",
             url: "https://updates.example.com/releases/v0.2.0/Codey-0.2.0-macos-arm64-unsigned.zip",
-            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            sha256:
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             size: 31_911_421,
           },
         };
@@ -242,14 +312,16 @@ if (import.meta.env.DEV) {
           filePath: "/tmp/codey-updates/Codey-0.2.0-macos-arm64-unsigned.zip",
           fileName: "Codey-0.2.0-macos-arm64-unsigned.zip",
           size: 31_911_421,
-          sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          sha256:
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           asset: {
             platform: "macos",
             arch: "arm64",
             packageType: "app-zip",
             fileName: "Codey-0.2.0-macos-arm64-unsigned.zip",
             url: "https://updates.example.com/releases/v0.2.0/Codey-0.2.0-macos-arm64-unsigned.zip",
-            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            sha256:
+              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             size: 31_911_421,
           },
         };

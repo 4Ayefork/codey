@@ -20,7 +20,10 @@ test("subagent optimization is opt-in and exposed through the settings switch", 
   assert.match(launcherSource, /config\.subagent_optimization/);
   assert.match(appSource, /const SUBAGENT_MODEL = "gpt-5\.6-luna"/);
   assert.match(uiSource, /checked=\{config\.subagentOptimization\}/);
-  assert.match(uiSource, /onCheckedChange=\{\(checked\) => onSubagentOptimizationChange\(checked\)\}/);
+  assert.match(
+    uiSource,
+    /onCheckedChange=\{\(checked\) =>\s*onSubagentOptimizationChange\(checked\)\s*\}/,
+  );
   assert.match(uiSource, /aria-label="启用子代理协作优化"/);
   assert.match(uiSource, /<Badge variant="warning">需支持 GPT-5\.6-Luna<\/Badge>/);
   assert.match(appSource, /invoke\("fetch_current_provider_models"\)/);

@@ -1663,6 +1663,47 @@ input:focus-visible,
   white-space: nowrap;
 }
 
+.experimental-runtime-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 5px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+  color: #6e6e73;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.experimental-runtime-check.success {
+  border-color: rgba(52, 199, 89, 0.22);
+  background: rgba(52, 199, 89, 0.08);
+  color: #1f7a3b;
+}
+
+.experimental-runtime-check.warning {
+  border-color: rgba(255, 159, 10, 0.28);
+  background: rgba(255, 159, 10, 0.08);
+  color: #8a5700;
+}
+
+.experimental-runtime-check.error {
+  border-color: rgba(255, 59, 48, 0.25);
+  background: rgba(255, 59, 48, 0.08);
+  color: #a5231d;
+}
+
+.experimental-runtime-check-label {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.experimental-runtime-check-text {
+  min-width: 0;
+}
+
 .experimental-features-note {
   margin: 0;
   padding-top: 8px;

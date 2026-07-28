@@ -75,6 +75,15 @@ export type InjectionScriptStatus = {
   error?: string;
 };
 
+export type ExperimentalFeatureRuntimeStatus = {
+  status: "effective" | "mismatch" | "unknown" | "error";
+  detail?: string;
+  updatedAt?: number;
+  effectiveFeatures?: ExperimentalFeaturesConfig;
+  configuredFeatures?: ExperimentalFeaturesConfig;
+  mismatchedFeatures?: string[];
+};
+
 export type RuntimeStatus = {
   running: boolean;
   appVersion?: string;
@@ -87,6 +96,7 @@ export type RuntimeStatus = {
   codexAppPath?: string;
   maintenance?: Maintenance;
   injectionScripts?: InjectionScriptStatus[];
+  experimentalFeatureRuntime?: ExperimentalFeatureRuntimeStatus;
   traceLogStats?: TraceLogStats;
 };
 
@@ -127,7 +137,10 @@ export type CcSwitchStatus = {
 };
 
 export type Notice = { tone: "info" | "success" | "error"; text: string };
-export type InlineResult = { tone: "idle" | "pending" | "success" | "error"; text: string };
+export type InlineResult = {
+  tone: "idle" | "pending" | "success" | "error";
+  text: string;
+};
 
 export type Confirmation = {
   action: "clear" | "restart" | "install-update";

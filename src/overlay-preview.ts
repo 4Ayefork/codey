@@ -6,13 +6,32 @@ import { previewTraceLogStats } from "./previewTraceLogStats";
 let previewConfig = {
   activeProfileId: "primary",
   profiles: [
-    { id: "primary", name: "主力代理", baseUrl: "https://api.example.com/v1", apiKey: "sk-codey-preview", protocol: "responses", ccSwitchReadOnly: false },
-    { id: "backup", name: "备用线路", baseUrl: "https://backup.example.com/v1", apiKey: "", protocol: "chatCompletions", ccSwitchReadOnly: false },
+    {
+      id: "primary",
+      name: "主力代理",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "sk-codey-preview",
+      protocol: "responses",
+      ccSwitchReadOnly: false,
+    },
+    {
+      id: "backup",
+      name: "备用线路",
+      baseUrl: "https://backup.example.com/v1",
+      apiKey: "",
+      protocol: "chatCompletions",
+      ccSwitchReadOnly: false,
+    },
   ],
-  webhook: { enabled: true, url: "https://open.feishu.cn/open-apis/bot/v2/hook/preview" },
+  webhook: {
+    enabled: true,
+    url: "https://open.feishu.cn/open-apis/bot/v2/hook/preview",
+  },
   codexAppPath: "",
   userScripts: [],
-  selectedModelsByProvider: { primary: ["provider-fast-coder", "claude-sonnet-4-5"] },
+  selectedModelsByProvider: {
+    primary: ["provider-fast-coder", "claude-sonnet-4-5"],
+  },
   upstreamModelsByProvider: { primary: previewUpstreamModels },
   defaultModelByProvider: {},
   disableTraceLogWrites: true,
@@ -40,7 +59,14 @@ const previewCcSwitch = {
   available: true,
   path: "~/.cc-switch/cc-switch.db",
   changed: false,
-  provider: { id: "primary", name: "主力代理", official: false, baseUrl: "https://api.example.com/v1", protocol: "responses", source: "cc-switch" },
+  provider: {
+    id: "primary",
+    name: "主力代理",
+    official: false,
+    baseUrl: "https://api.example.com/v1",
+    protocol: "responses",
+    source: "cc-switch",
+  },
 };
 let previewModelState = {
   officialModels: previewOfficialModels
@@ -54,7 +80,13 @@ let previewModelState = {
 
 window.__codexSessionDeleteBridge = async (path, payload) => {
   const command = path.replace(/^\/api\//, "");
-  if (command === "load_codey_config") return { config: previewConfig, modelState: previewModelState, ccSwitch: previewCcSwitch, path: "~/Library/Application Support/com.Codey.Codey/config.json" };
+  if (command === "load_codey_config")
+    return {
+      config: previewConfig,
+      modelState: previewModelState,
+      ccSwitch: previewCcSwitch,
+      path: "~/Library/Application Support/com.Codey.Codey/config.json",
+    };
   if (command === "runtime_status") {
     return {
       running: true,
@@ -62,6 +94,13 @@ window.__codexSessionDeleteBridge = async (path, payload) => {
       restartRequired: false,
       restartInProgress: false,
       activeProfileId: previewConfig.activeProfileId,
+      experimentalFeatureRuntime: {
+        status: "effective",
+        detail: "运行态与当前页面配置一致",
+        updatedAt: Date.now(),
+        configuredFeatures: previewConfig.experimentalFeatures,
+        effectiveFeatures: previewConfig.experimentalFeatures,
+      },
       traceLogStats: previewTraceLogStats,
     };
   }
@@ -75,9 +114,18 @@ window.__codexSessionDeleteBridge = async (path, payload) => {
       restartRequired: false,
     };
   }
-  if (command === "sync_current_provider") return { status: "ok", config: previewConfig, modelState: previewModelState, ccSwitch: previewCcSwitch };
+  if (command === "sync_current_provider")
+    return {
+      status: "ok",
+      config: previewConfig,
+      modelState: previewModelState,
+      ccSwitch: previewCcSwitch,
+    };
   if (command === "sync_official_experimental_features") {
-    return { status: "ok", experimentalFeatures: previewConfig.experimentalFeatures };
+    return {
+      status: "ok",
+      experimentalFeatures: previewConfig.experimentalFeatures,
+    };
   }
   if (command === "fetch_current_provider_models") {
     return {
@@ -89,7 +137,14 @@ window.__codexSessionDeleteBridge = async (path, payload) => {
   }
   if (command === "save_selected_models") {
     const selected = new Set((payload as { models: string[] }).models);
-    previewModelState = { ...previewModelState, thirdPartyModels: previewUpstreamModels.filter((model) => selected.has(model) && !previewOfficialModels.some((official) => official.slug === model)) };
+    previewModelState = {
+      ...previewModelState,
+      thirdPartyModels: previewUpstreamModels.filter(
+        (model) =>
+          selected.has(model) &&
+          !previewOfficialModels.some((official) => official.slug === model),
+      ),
+    };
     return {
       status: "ok",
       config: previewConfig,
@@ -99,7 +154,13 @@ window.__codexSessionDeleteBridge = async (path, payload) => {
   }
   if (command === "save_default_model") {
     const model = String((payload as { model?: string }).model || "");
-    previewConfig = { ...previewConfig, defaultModelByProvider: { ...previewConfig.defaultModelByProvider, primary: model } };
+    previewConfig = {
+      ...previewConfig,
+      defaultModelByProvider: {
+        ...previewConfig.defaultModelByProvider,
+        primary: model,
+      },
+    };
     previewModelState = { ...previewModelState, defaultModel: model };
     return {
       status: "ok",
@@ -109,7 +170,19 @@ window.__codexSessionDeleteBridge = async (path, payload) => {
     };
   }
   if (command === "restart_codey") return { status: "restarting" };
-  if (command === "clear_codex_trace_logs") return { status: "ok", protectionEnabled: previewConfig.disableTraceLogWrites, cleanup: { databasesFound: 2, databasesCleaned: 2, rowsDeleted: 318757, bytesBefore: 903634944, bytesAfter: 98304, bytesReclaimed: 903536640 } };
+  if (command === "clear_codex_trace_logs")
+    return {
+      status: "ok",
+      protectionEnabled: previewConfig.disableTraceLogWrites,
+      cleanup: {
+        databasesFound: 2,
+        databasesCleaned: 2,
+        rowsDeleted: 318757,
+        bytesBefore: 903634944,
+        bytesAfter: 98304,
+        bytesReclaimed: 903536640,
+      },
+    };
   return { status: "ok" };
 };
 

@@ -34,8 +34,14 @@ test("plugin marketplace repair is explicit and status checks stay read-only", a
   assert.doesNotMatch(launcherSource, /plugin_marketplace::ensure_marketplaces/);
   assert.match(launcherSource, /plugin_marketplace::marketplaces_status/);
 
-  assert.match(appSource, /invoke<PluginMarketplaceStatus>\("plugin_marketplace_status"\)/);
-  assert.match(appSource, /invoke<PluginMarketplaceStatus>\("repair_plugin_marketplace"\)/);
+  assert.match(
+    appSource,
+    /invoke<PluginMarketplaceStatus>\(\s*"plugin_marketplace_status"\s*,?\s*\)/,
+  );
+  assert.match(
+    appSource,
+    /invoke<PluginMarketplaceStatus>\(\s*"repair_plugin_marketplace"\s*,?\s*\)/,
+  );
   assert.match(sectionsSource, /仅检查当前状态，不会在打开配置页时自动修复/);
   assert.match(sectionsSource, /onRepairPluginMarketplace/);
   assert.match(sectionsSource, /手动修复/);

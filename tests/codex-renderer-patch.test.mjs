@@ -5,10 +5,12 @@ import test from "node:test";
 const normalizeLineEndings = (source) => source.replace(/\r\n/g, "\n");
 
 async function loadStartupPatchExpression(experimentalFeatureOverrides = {}) {
-  const source = normalizeLineEndings(await readFile(
-    new URL("../backend/src/codex_startup_patch.rs", import.meta.url),
-    "utf8",
-  ));
+  const source = normalizeLineEndings(
+    await readFile(
+      new URL("../backend/src/codex_startup_patch.rs", import.meta.url),
+      "utf8",
+    ),
+  );
   const template = source.match(
     /const STARTUP_PATCH_TEMPLATE: &str = r#"\n([\s\S]*?)\n"#;/,
   )?.[1];
@@ -45,23 +47,30 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
 
   const nativeConsoleError = console.error;
   const patchErrors = [];
-  console.error = (...args) => { patchErrors.push(args); };
+  console.error = (...args) => {
+    patchErrors.push(args);
+  };
 
   try {
     assert.equal(
-      (0, eval)(await loadStartupPatchExpression({
-        unified_exec: true,
-        remote_compaction_v2: false,
-      })),
+      (0, eval)(
+        await loadStartupPatchExpression({
+          unified_exec: true,
+          remote_compaction_v2: false,
+        }),
+      ),
       "codey-startup-patch-installed-v15",
     );
     const electron = Module._load("electron", undefined, false);
-    const upstreamHandler = async () => new Response([
-      "useHiddenModels:",
-      "availableModels:",
-      "includeUltraReasoningEffort",
-      "amazonBedrock",
-    ].join(" "));
+    const upstreamHandler = async () =>
+      new Response(
+        [
+          "useHiddenModels:",
+          "availableModels:",
+          "includeUltraReasoningEffort",
+          "amazonBedrock",
+        ].join(" "),
+      );
     electron.protocol.handle("app", upstreamHandler);
     assert.equal(typeof installedHandler, "function");
 
@@ -71,7 +80,10 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
     assert.equal(response.ok, true);
     assert.match(await response.text(), /useHiddenModels:/);
     assert.equal(patchErrors.length, 1);
-    assert.match(String(patchErrors[0][0]), /incompatible Codex renderer patch/);
+    assert.match(
+      String(patchErrors[0][0]),
+      /incompatible Codex renderer patch/,
+    );
 
     const statsigSource = [
       "function Ftu(e){",
@@ -98,10 +110,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       patchedStatsigSource,
       /let t=await Promise\.race\(\[Ueu\(e\),new Promise/,
     );
-    assert.match(
-      patchedStatsigSource,
-      /Codey Statsig bootstrap timeout/,
-    );
+    assert.match(patchedStatsigSource, /Codey Statsig bootstrap timeout/);
     assert.doesNotMatch(patchedStatsigSource, /let t=await Ueu\(e\);/);
     assert.match(
       patchedStatsigSource,
@@ -111,10 +120,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       patchedStatsigSource,
       /Codey Statsig async initialization timeout/,
     );
-    assert.doesNotMatch(
-      patchedStatsigSource,
-      /i\.initializeAsync\(\)\.catch/,
-    );
+    assert.doesNotMatch(patchedStatsigSource, /i\.initializeAsync\(\)\.catch/);
 
     const featureSource = [
       "function Lln(e){",
@@ -122,6 +128,7 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       "return Hf.info(`Concurrent reasoning summaries feature override resolved`,{}),r}",
       "const feature_overrides=`feature_overrides`,gate=`2508143457`;",
     ].join("");
+    delete globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__;
     electron.protocol.handle("app", async () => new Response(featureSource));
     const featureResponse = await installedHandler({
       url: "app://-/assets/app-initial-BHB6SClA.js",
@@ -147,6 +154,23 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       shell_snapshot: true,
       concurrent_reasoning_summaries: true,
     });
+    assert.deepEqual(
+      globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__.configuredFeatures,
+      {
+        unifiedExec: true,
+        remoteCompactionV2: false,
+      },
+    );
+    assert.deepEqual(
+      globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__.effectiveFeatures,
+      {
+        unifiedExec: true,
+        remoteCompactionV2: false,
+        shellSnapshot: true,
+        concurrentReasoningSummaries: true,
+      },
+    );
+    delete globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__;
 
     let rejectBootstrap;
     const neverCompletesBootstrap = new Promise((_, reject) => {
@@ -165,7 +189,9 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       () => neverCompletesBootstrap,
       {
         StatsigClient() {
-          assert.fail("StatsigClient must not be constructed after bootstrap timeout");
+          assert.fail(
+            "StatsigClient must not be constructed after bootstrap timeout",
+          );
         },
       },
       class FakeStatsigInitializationError extends Error {},
@@ -216,10 +242,13 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       };
 
       const syncStatsigPromise = syncStatsig("input");
-      const syncStatsigAssertion = assert.rejects(syncStatsigPromise, (error) => {
-        assert.match(String(error), /Codey Statsig bootstrap timeout/);
-        return true;
-      });
+      const syncStatsigAssertion = assert.rejects(
+        syncStatsigPromise,
+        (error) => {
+          assert.match(String(error), /Codey Statsig bootstrap timeout/);
+          return true;
+        },
+      );
       assert.equal(runNextTimer(), 1500);
       now += 1500;
       await syncStatsigAssertion;
@@ -248,7 +277,9 @@ test("an incompatible optional renderer patch never blocks the Codex module resp
       );
       assert.deepEqual(asyncGateFinished, [false]);
       rejectBootstrap(new Error("late bootstrap failure"));
-      releaseAsyncInitialization(new Error("late async initialization failure"));
+      releaseAsyncInitialization(
+        new Error("late async initialization failure"),
+      );
       await new Promise((resolve) => setImmediate(resolve));
       assert.deepEqual(unhandledRejections, []);
     } finally {

@@ -10,7 +10,10 @@ test("settings overlay only closes explicitly and restores unsaved config", asyn
     readFile(new URL("src/overlay.tsx", root), "utf8"),
   ]);
 
-  assert.match(appSource, /const persistedConfigRef = useRef<Config \| null>\(null\)/);
+  assert.match(
+    appSource,
+    /const persistedConfigRef = useRef<Config \| null>\(null\)/,
+  );
   assert.match(
     appSource,
     /function closeSettings\(\) \{[\s\S]*setConfig\(persistedConfigRef\.current\)[\s\S]*setDirty\(false\)[\s\S]*onClose\?\.\(\)/,
@@ -20,6 +23,7 @@ test("settings overlay only closes explicitly and restores unsaved config", asyn
 
   assert.doesNotMatch(overlaySource, /backdrop\.addEventListener\("click"/);
   assert.doesNotMatch(overlaySource, /addEventListener\("keydown"/);
+  assert.match(overlaySource, /codey-settings-opened/);
   assert.match(overlaySource, /toggle: open/);
 });
 
@@ -28,10 +32,13 @@ test("operations tooltips stay inside the settings overlay", async () => {
     new URL("src/AppSections.tsx", root),
     "utf8",
   );
-  assert.match(appSectionsSource, /const operationsHubRef = useRef<HTMLElement>\(null\)/);
   assert.match(
     appSectionsSource,
-    /operationsHubRef\.current\?\.closest<HTMLElement>\("\.app-shell"\) \?\? document\.body/,
+    /const operationsHubRef = useRef<HTMLElement>\(null\)/,
+  );
+  assert.match(
+    appSectionsSource,
+    /operationsHubRef\.current\?\s*\.closest<HTMLElement>\("\.app-shell"\)\s*\?\?\s*document\.body/,
   );
   assert.match(appSectionsSource, /ref=\{operationsHubRef\}/);
   assert.match(appSectionsSource, /getPopupContainer=\{getTooltipContainer\}/);

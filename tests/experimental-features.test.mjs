@@ -28,12 +28,14 @@ const flags = [
 const normalizeLineEndings = (source) => source.replace(/\r\n/g, "\n");
 
 async function sources() {
-  return Object.fromEntries(await Promise.all(
-    Object.entries(paths).map(async ([key, path]) => [
-      key,
-      normalizeLineEndings(await readFile(path, "utf8")),
-    ]),
-  ));
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(paths).map(async ([key, path]) => [
+        key,
+        normalizeLineEndings(await readFile(path, "utf8")),
+      ]),
+    ),
+  );
 }
 
 test("the experimental feature card exposes all switches with concise descriptions", async () => {
@@ -43,8 +45,14 @@ test("the experimental feature card exposes all switches with concise descriptio
   assert.match(app, /sync_official_experimental_features/);
   assert.match(app, /保存并重启 Codex 后生效/);
   assert.match(sections, /同步官方配置/);
+  assert.match(sections, /打开配置面板时读取一次运行态/);
+  assert.match(sections, /运行态与当前页面配置一致/);
   assert.match(sections, /不点击同步时会一直使用已保存的用户配置/);
   assert.match(types, /experimentalFeatures: ExperimentalFeaturesConfig/);
+  assert.match(
+    types,
+    /experimentalFeatureRuntime\?: ExperimentalFeatureRuntimeStatus/,
+  );
 
   for (const flag of flags) {
     assert.match(sections, new RegExp(`flag: "${flag}"`));
@@ -61,16 +69,27 @@ test("user feature settings persist, require restart, and override official valu
   const { config, commands, cdp, launcher, patch } = await sources();
 
   assert.match(config, /pub experimental_features: ExperimentalFeaturesConfig/);
-  assert.match(commands, /config\.experimental_features = config_input\.experimental_features/);
+  assert.match(
+    commands,
+    /config\.experimental_features = config_input\.experimental_features/,
+  );
   assert.match(
     commands,
     /applied\.experimental_features != current\.experimental_features/,
   );
   assert.match(commands, /"sync_official_experimental_features"/);
+  assert.match(commands, /"experimentalFeatureRuntime"/);
   assert.match(cdp, /_store\?\._valuesForExternalUse/);
+  assert.match(cdp, /read_experimental_feature_runtime_status/);
+  assert.match(cdp, /__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__/);
   assert.match(cdp, /layer\?\.value\?\.feature_overrides/);
   assert.match(launcher, /config\.experimental_features/);
-  assert.match(patch, /\.\.\.\$\{JSON\.stringify\(experimentalFeatureOverrides\)\}/);
+  assert.match(launcher, /experimental_feature_runtime/);
+  assert.match(
+    patch,
+    /\.\.\.\$\{JSON\.stringify\(experimentalFeatureOverrides\)\}/,
+  );
+  assert.match(patch, /__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__/);
   assert.match(patch, /codey-startup-patch-installed-v15/);
 });
 

@@ -140,7 +140,8 @@ export function OperationsPanel({
   const [activeCardTitle, setActiveCardTitle] = useState<string | null>(null);
 
   const getTooltipContainer = () =>
-    operationsHubRef.current?.closest<HTMLElement>(".app-shell") ?? document.body;
+    operationsHubRef.current?.closest<HTMLElement>(".app-shell") ??
+    document.body;
 
   const toggleCard = (title: string) => {
     setActiveCardTitle((prev) => (prev === title ? null : title));
@@ -178,24 +179,30 @@ export function OperationsPanel({
       ? "未生效"
       : "待检测";
   const windowsPatchDetail = windowsPatchReady
-    ? maintenance?.performanceDetail
-      || "WMI 周期采样、临时 WebView 残留与执行环境泄漏修复已生效。"
+    ? maintenance?.performanceDetail ||
+      "WMI 周期采样、临时 WebView 残留与执行环境泄漏修复已生效。"
     : windowsPatchFailed
-      ? maintenance?.performanceDetail
-        || status.startupError
-        || "Windows 优化补丁加载异常。"
+      ? maintenance?.performanceDetail ||
+        status.startupError ||
+        "Windows 优化补丁加载异常。"
       : status.running
         ? "正在确认 Windows 优化补丁状态。"
         : "将在 Codex 启动时自动安装并校验 Windows 优化补丁。";
   const resolvedCodexPath = status.codexAppPath || "/Applications/ChatGPT.app";
   const restartPending = Boolean(status.restartRequired);
   const pluginIssues = [
-    pluginMarketplaceStatus?.officialMarketplace === false ? "官方市场快照缺失" : "",
-    pluginMarketplaceStatus?.officialMarketplace && pluginMarketplaceStatus.officialRegistered === false
+    pluginMarketplaceStatus?.officialMarketplace === false
+      ? "官方市场快照缺失"
+      : "",
+    pluginMarketplaceStatus?.officialMarketplace &&
+    pluginMarketplaceStatus.officialRegistered === false
       ? "官方市场尚未注册"
       : "",
-    pluginMarketplaceStatus?.remoteMarketplace === false ? "远程市场快照缺失" : "",
-    pluginMarketplaceStatus?.remoteMarketplace && pluginMarketplaceStatus.remoteRegistered === false
+    pluginMarketplaceStatus?.remoteMarketplace === false
+      ? "远程市场快照缺失"
+      : "",
+    pluginMarketplaceStatus?.remoteMarketplace &&
+    pluginMarketplaceStatus.remoteRegistered === false
       ? "远程市场尚未注册"
       : "",
   ].filter(Boolean);
@@ -251,10 +258,11 @@ export function OperationsPanel({
     {
       id: "opt-slim",
       icon: IconAdjustmentsHorizontal,
-      tooltip: (config.slimCodexPet || config.slimCodexVoice)
-        ? `客户端精简：已开启${config.slimCodexPet ? "宠物" : ""}${config.slimCodexVoice ? "/语音" : ""}精简`
-        : "客户端精简：保留完整功能",
-      tone: (config.slimCodexPet || config.slimCodexVoice) ? "success" : "info",
+      tooltip:
+        config.slimCodexPet || config.slimCodexVoice
+          ? `客户端精简：已开启${config.slimCodexPet ? "宠物" : ""}${config.slimCodexVoice ? "/语音" : ""}精简`
+          : "客户端精简：保留完整功能",
+      tone: config.slimCodexPet || config.slimCodexVoice ? "success" : "info",
     },
     {
       id: "opt-patch",
@@ -289,18 +297,26 @@ export function OperationsPanel({
     {
       id: "plugin-official",
       icon: IconShoppingBag,
-      tooltip: pluginMarketplaceStatus?.officialMarketplace !== false
-        ? "官方市场：快照与注册完整"
-        : "官方市场：快照缺失或尚未注册",
-      tone: pluginMarketplaceStatus?.officialMarketplace !== false ? "success" : "warning",
+      tooltip:
+        pluginMarketplaceStatus?.officialMarketplace !== false
+          ? "官方市场：快照与注册完整"
+          : "官方市场：快照缺失或尚未注册",
+      tone:
+        pluginMarketplaceStatus?.officialMarketplace !== false
+          ? "success"
+          : "warning",
     },
     {
       id: "plugin-remote",
       icon: IconCloudCheck,
-      tooltip: pluginMarketplaceStatus?.remoteMarketplace !== false
-        ? "远程市场：快照与注册完整"
-        : "远程市场：快照缺失或尚未注册",
-      tone: pluginMarketplaceStatus?.remoteMarketplace !== false ? "success" : "warning",
+      tooltip:
+        pluginMarketplaceStatus?.remoteMarketplace !== false
+          ? "远程市场：快照与注册完整"
+          : "远程市场：快照缺失或尚未注册",
+      tone:
+        pluginMarketplaceStatus?.remoteMarketplace !== false
+          ? "success"
+          : "warning",
     },
     {
       id: "plugin-host",
@@ -329,7 +345,9 @@ export function OperationsPanel({
   }> = [
     {
       title: "会话恢复",
-      description: sessionOk ? "索引与恢复链路运行正常，上下文恢复就绪。" : "正在确认会话索引与恢复链路。",
+      description: sessionOk
+        ? "索引与恢复链路运行正常，上下文恢复就绪。"
+        : "正在确认会话索引与恢复链路。",
       metrics: sessionMetrics,
       label: sessionOk ? "正常" : maintenance ? "需检查" : "检查中",
       tone: sessionOk ? "success" : maintenance ? "destructive" : "warning",
@@ -360,11 +378,12 @@ export function OperationsPanel({
             : performanceError
               ? "异常"
               : "已优化",
-      tone: injectionError || performanceError
-        ? "destructive"
-        : injectionStatusPending || unverifiedInjectionScripts.length > 0
-          ? "warning"
-          : "success",
+      tone:
+        injectionError || performanceError
+          ? "destructive"
+          : injectionStatusPending || unverifiedInjectionScripts.length > 0
+            ? "warning"
+            : "success",
       icon: Cpu,
       showInjectionScripts: true,
     },
@@ -383,7 +402,11 @@ export function OperationsPanel({
             : pluginMarketplaceStatus
               ? "需修复"
               : "检查中",
-      tone: pluginOk ? "success" : pluginStatusError ? "destructive" : "warning",
+      tone: pluginOk
+        ? "success"
+        : pluginStatusError
+          ? "destructive"
+          : "warning",
       icon: PlugZap,
       action: {
         label: pluginOk ? "重新检查并修复" : "手动修复",
@@ -408,7 +431,10 @@ export function OperationsPanel({
             </span>
             <div>
               <h1 id="operations-title">Codex 运行状态</h1>
-              <div className="path-display header-path-display" aria-label="Codex 应用路径">
+              <div
+                className="path-display header-path-display"
+                aria-label="Codex 应用路径"
+              >
                 <FolderOpen size={14} aria-hidden="true" />
                 <code>{config.codexAppPath || resolvedCodexPath}</code>
               </div>
@@ -416,14 +442,22 @@ export function OperationsPanel({
           </div>
 
           <div className="operations-actions">
-            <div className="operations-status-icons" role="list" aria-label="核心服务状态">
+            <div
+              className="operations-status-icons"
+              role="list"
+              aria-label="核心服务状态"
+            >
               {statusCards.map((item) => {
                 const StatusIcon = item.icon;
                 const isExpanded = activeCardTitle === item.title;
                 return (
                   <Tooltip
                     key={item.title}
-                    content={isExpanded ? `收起“${item.title}”` : `点击展开“${item.title}”详情`}
+                    content={
+                      isExpanded
+                        ? `收起“${item.title}”`
+                        : `点击展开“${item.title}”详情`
+                    }
                     getPopupContainer={getTooltipContainer}
                     position="top"
                   >
@@ -435,16 +469,31 @@ export function OperationsPanel({
                       aria-label={`${item.title}（${item.label}），点击${isExpanded ? "收起" : "展开"}`}
                     >
                       <StatusIcon size={16} aria-hidden="true" />
-                      <span className="operations-icon-dot" aria-hidden="true" />
+                      <span
+                        className="operations-icon-dot"
+                        aria-hidden="true"
+                      />
                     </button>
                   </Tooltip>
                 );
               })}
             </div>
 
-            <Badge variant={restartPending ? "warning" : status.running ? "success" : "secondary"}>
+            <Badge
+              variant={
+                restartPending
+                  ? "warning"
+                  : status.running
+                    ? "success"
+                    : "secondary"
+              }
+            >
               <span className="operations-status-dot" aria-hidden="true" />
-              {restartPending ? "等待重启" : status.running ? "运行中" : "未启动"}
+              {restartPending
+                ? "等待重启"
+                : status.running
+                  ? "运行中"
+                  : "未启动"}
             </Badge>
             <Button
               variant="warning"
@@ -452,25 +501,36 @@ export function OperationsPanel({
               disabled={isBusy || status.restartInProgress || !status.running}
               onClick={onRestart}
             >
-              {busy === "restart" || status.restartInProgress
-                ? <LoaderCircle className="spinner" aria-hidden="true" />
-                : <RefreshCw aria-hidden="true" />}
+              {busy === "restart" || status.restartInProgress ? (
+                <LoaderCircle className="spinner" aria-hidden="true" />
+              ) : (
+                <RefreshCw aria-hidden="true" />
+              )}
               {status.running ? "重启 Codex" : "未运行"}
             </Button>
           </div>
         </div>
 
         {activeCardTitle && (
-          <div className="operations-expanded-grid" role="region" aria-label="展开的系统详情">
+          <div
+            className="operations-expanded-grid"
+            role="region"
+            aria-label="展开的系统详情"
+          >
             {statusCards
               .filter((item) => item.title === activeCardTitle)
               .map((item) => {
                 const StatusIcon = item.icon;
                 return (
-                  <article key={item.title} className={`operations-expanded-card tone-${item.tone}`}>
+                  <article
+                    key={item.title}
+                    className={`operations-expanded-card tone-${item.tone}`}
+                  >
                     <div className="expanded-card-header">
                       <div className="expanded-card-title">
-                        <span className={`expanded-card-icon tone-${item.tone}`}>
+                        <span
+                          className={`expanded-card-icon tone-${item.tone}`}
+                        >
                           <StatusIcon size={18} aria-hidden="true" />
                         </span>
                         <div>
@@ -488,18 +548,28 @@ export function OperationsPanel({
                         {item.metrics.map((metric) => {
                           const MetricIcon = metric.icon;
                           return (
-                            <div key={metric.id} className="expanded-metric-item">
-                              <span className={`expanded-metric-icon tone-${metric.tone || "info"}`}>
+                            <div
+                              key={metric.id}
+                              className="expanded-metric-item"
+                            >
+                              <span
+                                className={`expanded-metric-icon tone-${metric.tone || "info"}`}
+                              >
                                 <MetricIcon size={14} aria-hidden="true" />
                               </span>
-                              <span className="expanded-metric-text">{metric.tooltip}</span>
+                              <span className="expanded-metric-text">
+                                {metric.tooltip}
+                              </span>
                             </div>
                           );
                         })}
                       </div>
 
                       {item.showInjectionScripts && (
-                        <section className="injection-status-section" aria-labelledby="injection-status-title">
+                        <section
+                          className="injection-status-section"
+                          aria-labelledby="injection-status-title"
+                        >
                           <div className="injection-status-header">
                             <h4 id="injection-status-title">脚本生效状态</h4>
                             <span className="injection-status-summary">
@@ -512,9 +582,12 @@ export function OperationsPanel({
                           {injectionScripts.length > 0 ? (
                             <div className="injection-status-list" role="list">
                               {injectionScripts.map((script) => {
-                                const scriptEffective = script.status === "effective";
-                                const scriptUnverified = script.status === "executed";
-                                const scriptFailed = !scriptEffective && !scriptUnverified;
+                                const scriptEffective =
+                                  script.status === "effective";
+                                const scriptUnverified =
+                                  script.status === "executed";
+                                const scriptFailed =
+                                  !scriptEffective && !scriptUnverified;
                                 const ScriptStatusIcon = scriptEffective
                                   ? Check
                                   : scriptUnverified
@@ -531,32 +604,46 @@ export function OperationsPanel({
                                     className={`injection-status-row${stateClass}`}
                                     role="listitem"
                                   >
-                                    <span className="injection-script-icon" aria-hidden="true">
+                                    <span
+                                      className="injection-script-icon"
+                                      aria-hidden="true"
+                                    >
                                       <Code size={15} />
                                     </span>
                                     <div className="injection-script-copy">
                                       <div className="injection-script-title">
                                         <span>{script.name}</span>
                                         <span className="injection-script-source">
-                                          {script.source === "user" ? "用户脚本" : "内置"}
+                                          {script.source === "user"
+                                            ? "用户脚本"
+                                            : "内置"}
                                         </span>
                                       </div>
                                       {script.error && (
-                                        <code className="injection-script-error">{script.error}</code>
+                                        <code className="injection-script-error">
+                                          {script.error}
+                                        </code>
                                       )}
                                       {!script.error && script.detail && (
-                                        <span className="injection-script-detail">{script.detail}</span>
+                                        <span className="injection-script-detail">
+                                          {script.detail}
+                                        </span>
                                       )}
                                     </div>
                                     <span
                                       className={`injection-script-state${stateClass}`}
-                                      title={scriptEffective
-                                        ? "生效探针通过"
-                                        : scriptUnverified
-                                          ? "脚本已执行，但没有生效证据"
-                                          : "脚本异常"}
+                                      title={
+                                        scriptEffective
+                                          ? "生效探针通过"
+                                          : scriptUnverified
+                                            ? "脚本已执行，但没有生效证据"
+                                            : "脚本异常"
+                                      }
                                     >
-                                      <ScriptStatusIcon size={14} aria-hidden="true" />
+                                      <ScriptStatusIcon
+                                        size={14}
+                                        aria-hidden="true"
+                                      />
                                       {scriptEffective
                                         ? "已生效"
                                         : scriptUnverified
@@ -585,9 +672,14 @@ export function OperationsPanel({
                             disabled={item.action.disabled}
                             onClick={item.action.onClick}
                           >
-                            {item.action.loading
-                              ? <LoaderCircle className="spinner" aria-hidden="true" />
-                              : <RefreshCw aria-hidden="true" />}
+                            {item.action.loading ? (
+                              <LoaderCircle
+                                className="spinner"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <RefreshCw aria-hidden="true" />
+                            )}
                             {item.action.label}
                           </Button>
                         </div>
@@ -656,20 +748,30 @@ export function AppUpdateCard({
       <Card className="secondary-card update-card">
         <div className="update-card-header">
           <div className="update-card-title">
-            <span className="column-icon"><RefreshCw size={16} /></span>
+            <span className="column-icon">
+              <RefreshCw size={16} />
+            </span>
             <div>
               <strong>应用更新</strong>
-              <small>当前版本 {status.appVersion ? `v${status.appVersion}` : "读取中"}</small>
+              <small>
+                当前版本{" "}
+                {status.appVersion ? `v${status.appVersion}` : "读取中"}
+              </small>
             </div>
           </div>
-          <Badge variant={updateCheck?.updateAvailable ? "warning" : "secondary"}>
+          <Badge
+            variant={updateCheck?.updateAvailable ? "warning" : "secondary"}
+          >
             {updateCheck?.updateAvailable ? "发现新版本" : "已是最新"}
           </Badge>
         </div>
 
         <div className="update-card-content">
           <div className="update-status-msg">
-            <span className={`inline-result ${updateResult.tone}`} aria-live="polite">
+            <span
+              className={`inline-result ${updateResult.tone}`}
+              aria-live="polite"
+            >
               {updateResult.text || "从公开更新源检查最新稳定版本。"}
             </span>
           </div>
@@ -681,9 +783,11 @@ export function AppUpdateCard({
                 disabled={isBusy}
                 onClick={onInstallUpdate}
               >
-                {busy === "install-update"
-                  ? <LoaderCircle className="spinner" aria-hidden="true" />
-                  : <Check aria-hidden="true" />}
+                {busy === "install-update" ? (
+                  <LoaderCircle className="spinner" aria-hidden="true" />
+                ) : (
+                  <Check aria-hidden="true" />
+                )}
                 安装并重启
               </Button>
             ) : updateCheck?.updateAvailable && updateCheck.selectedAsset ? (
@@ -693,9 +797,11 @@ export function AppUpdateCard({
                 disabled={isBusy}
                 onClick={onDownloadUpdate}
               >
-                {busy === "download-update"
-                  ? <LoaderCircle className="spinner" aria-hidden="true" />
-                  : <Download aria-hidden="true" />}
+                {busy === "download-update" ? (
+                  <LoaderCircle className="spinner" aria-hidden="true" />
+                ) : (
+                  <Download aria-hidden="true" />
+                )}
                 下载更新
               </Button>
             ) : null}
@@ -705,9 +811,11 @@ export function AppUpdateCard({
               disabled={isBusy}
               onClick={onCheckUpdates}
             >
-              {busy === "check-update"
-                ? <LoaderCircle className="spinner" aria-hidden="true" />
-                : <RefreshCw aria-hidden="true" />}
+              {busy === "check-update" ? (
+                <LoaderCircle className="spinner" aria-hidden="true" />
+              ) : (
+                <RefreshCw aria-hidden="true" />
+              )}
               检查更新
             </Button>
           </div>
@@ -746,7 +854,11 @@ export function ModelSection({
       <div className="section-title">
         <div>
           <h2 id="route-title">线路与模型</h2>
-          <p>{ccSwitchStatus.available ? "cc-switch 当前配置" : "本地 Codex 直登配置"}</p>
+          <p>
+            {ccSwitchStatus.available
+              ? "cc-switch 当前配置"
+              : "本地 Codex 直登配置"}
+          </p>
         </div>
         <div className="route-heading-actions">
           <Button
@@ -755,7 +867,10 @@ export function ModelSection({
             disabled={dirty || isBusy}
             onClick={onSyncCurrentProvider}
           >
-            <RefreshCw className={busy === "sync-provider" ? "spinner" : ""} aria-hidden="true" />
+            <RefreshCw
+              className={busy === "sync-provider" ? "spinner" : ""}
+              aria-hidden="true"
+            />
             同步当前线路
           </Button>
         </div>
@@ -764,7 +879,9 @@ export function ModelSection({
       <Card className="route-card">
         <div className="provider-summary">
           <div className="provider-identity">
-            <span className="column-icon"><Server size={16} /></span>
+            <span className="column-icon">
+              <Server size={16} />
+            </span>
             <div className="provider-name-box">
               <strong>{provider.name}</strong>
             </div>
@@ -772,11 +889,15 @@ export function ModelSection({
           <div className="provider-meta">
             <div>
               <span>类型</span>
-              <strong>{provider.official ? "OpenAI 官方" : "第三方 API"}</strong>
+              <strong>
+                {provider.official ? "OpenAI 官方" : "第三方 API"}
+              </strong>
             </div>
             <div className="provider-endpoint">
               <span>地址</span>
-              <strong>{provider.official ? "ChatGPT 登录" : provider.baseUrl}</strong>
+              <strong>
+                {provider.official ? "ChatGPT 登录" : provider.baseUrl}
+              </strong>
             </div>
             <div>
               <span>默认模型</span>
@@ -788,10 +909,16 @@ export function ModelSection({
         <div className="catalog-workspace">
           <div className="catalog-heading">
             <div className="column-heading">
-              <span className="column-icon"><GitBranch size={16} /></span>
+              <span className="column-icon">
+                <GitBranch size={16} />
+              </span>
               <div>
                 <strong>模型列表</strong>
-                <small>{provider.official ? "官方目录" : `已发现 ${modelState.upstreamModels.length} 个上游模型`}</small>
+                <small>
+                  {provider.official
+                    ? "官方目录"
+                    : `已发现 ${modelState.upstreamModels.length} 个上游模型`}
+                </small>
               </div>
             </div>
             {!provider.official && (
@@ -801,7 +928,10 @@ export function ModelSection({
                 disabled={isBusy}
                 onClick={onFetchCurrentModels}
               >
-                <RefreshCw className={busy === "fetch-models" ? "spinner" : ""} aria-hidden="true" />
+                <RefreshCw
+                  className={busy === "fetch-models" ? "spinner" : ""}
+                  aria-hidden="true"
+                />
                 同步模型
               </Button>
             )}
@@ -812,7 +942,14 @@ export function ModelSection({
               <div className="model-group-title">
                 <div>
                   <strong>官方模型</strong>
-                  <small>{modelState.officialModels.filter((model) => model.supported).length} / {modelState.officialModels.length}</small>
+                  <small>
+                    {
+                      modelState.officialModels.filter(
+                        (model) => model.supported,
+                      ).length
+                    }{" "}
+                    / {modelState.officialModels.length}
+                  </small>
                 </div>
                 <Badge variant="info">OpenAI</Badge>
               </div>
@@ -826,7 +963,11 @@ export function ModelSection({
                       aria-disabled={!model.supported}
                     >
                       <span className="model-availability">
-                        {model.supported ? <Check size={12} /> : <X size={12} />}
+                        {model.supported ? (
+                          <Check size={12} />
+                        ) : (
+                          <X size={12} />
+                        )}
                       </span>
                       <div>
                         <strong>{model.displayName}</strong>
@@ -848,7 +989,9 @@ export function ModelSection({
                     </div>
                   );
                 })}
-                {modelState.officialModels.length === 0 && <div className="empty-state">暂未读取到官方模型</div>}
+                {modelState.officialModels.length === 0 && (
+                  <div className="empty-state">暂未读取到官方模型</div>
+                )}
               </div>
             </section>
 
@@ -862,15 +1005,22 @@ export function ModelSection({
                   <Badge variant="brand">API</Badge>
                 </div>
                 <div
-                  className={modelState.thirdPartyModels.length === 0
-                    ? "catalog-model-list catalog-model-list-empty"
-                    : "catalog-model-list"}
+                  className={
+                    modelState.thirdPartyModels.length === 0
+                      ? "catalog-model-list catalog-model-list-empty"
+                      : "catalog-model-list"
+                  }
                 >
                   {modelState.thirdPartyModels.map((model) => {
                     const isDefault = defaultModel === model;
                     return (
-                      <div className={`catalog-model-row third-party${isDefault ? " default-model" : ""}`} key={model}>
-                        <span className="model-availability"><Check size={12} /></span>
+                      <div
+                        className={`catalog-model-row third-party${isDefault ? " default-model" : ""}`}
+                        key={model}
+                      >
+                        <span className="model-availability">
+                          <Check size={12} />
+                        </span>
                         <div>
                           <strong>{model}</strong>
                           <small>第三方模型</small>
@@ -902,7 +1052,9 @@ export function ModelSection({
                         <PlugZap size={22} />
                       </span>
                       <div className="catalog-empty-copy">
-                        <strong id="third-party-empty-title">尚未添加三方模型</strong>
+                        <strong id="third-party-empty-title">
+                          尚未添加三方模型
+                        </strong>
                         <p>当前线路还没有已选模型。</p>
                       </div>
                       <Button
@@ -911,9 +1063,14 @@ export function ModelSection({
                         disabled={isBusy}
                         onClick={onFetchCurrentModels}
                       >
-                        {busy === "fetch-models"
-                          ? <LoaderCircle className="spinner" aria-hidden="true" />
-                          : <RefreshCw aria-hidden="true" />}
+                        {busy === "fetch-models" ? (
+                          <LoaderCircle
+                            className="spinner"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <RefreshCw aria-hidden="true" />
+                        )}
                         {busy === "fetch-models" ? "同步中" : "同步并选择模型"}
                       </Button>
                     </div>
@@ -940,6 +1097,7 @@ export function ModelSection({
 
 type ExperimentalFeaturesCardProps = {
   config: Config;
+  status: RuntimeStatus;
   busy: string | null;
   isBusy: boolean;
   onConfigChange: (config: Config) => void;
@@ -948,13 +1106,52 @@ type ExperimentalFeaturesCardProps = {
 
 export function ExperimentalFeaturesCard({
   config,
+  status,
   busy,
   isBusy,
   onConfigChange,
   onSyncOfficial,
 }: ExperimentalFeaturesCardProps) {
+  const runtimeCheck = status.experimentalFeatureRuntime;
+  const effectiveFeatures = runtimeCheck?.effectiveFeatures;
+  const mismatchedFeatures = effectiveFeatures
+    ? EXPERIMENTAL_FEATURES.filter(
+        (feature) =>
+          effectiveFeatures[feature.configKey] !==
+          config.experimentalFeatures[feature.configKey],
+      )
+    : [];
+  const runtimeCheckTone = !status.running
+    ? "idle"
+    : runtimeCheck?.status === "error"
+      ? "error"
+      : effectiveFeatures
+        ? mismatchedFeatures.length > 0
+          ? "warning"
+          : "success"
+        : "idle";
+  const checkedAt = runtimeCheck?.updatedAt
+    ? new Date(runtimeCheck.updatedAt).toLocaleTimeString("zh-CN", {
+        hour12: false,
+      })
+    : "";
+  const runtimeCheckText = !status.running
+    ? "Codex 未运行，无法读取运行态"
+    : runtimeCheckTone === "success"
+      ? `已生效：运行态与当前页面配置一致${checkedAt ? `（${checkedAt}）` : ""}`
+      : runtimeCheckTone === "warning"
+        ? `未一致：${mismatchedFeatures
+            .slice(0, 3)
+            .map((feature) => feature.label)
+            .join(
+              "、",
+            )}${mismatchedFeatures.length > 3 ? " 等" : ""} 与当前页面配置不同；保存并重启 Codex 后再打开自检`
+        : runtimeCheck?.detail || "打开配置面板时读取一次运行态，不做后台轮询";
   return (
-    <section className="secondary-section" aria-labelledby="experimental-features-title">
+    <section
+      className="secondary-section"
+      aria-labelledby="experimental-features-title"
+    >
       <div className="section-title compact">
         <div>
           <h2 id="experimental-features-title">试验性功能</h2>
@@ -967,18 +1164,32 @@ export function ExperimentalFeaturesCard({
           aria-busy={busy === "sync-experimental-features"}
           onClick={onSyncOfficial}
         >
-          {busy === "sync-experimental-features"
-            ? <LoaderCircle className="spinner" aria-hidden="true" />
-            : <RefreshCw aria-hidden="true" />}
+          {busy === "sync-experimental-features" ? (
+            <LoaderCircle className="spinner" aria-hidden="true" />
+          ) : (
+            <RefreshCw aria-hidden="true" />
+          )}
           {busy === "sync-experimental-features" ? "同步中" : "同步官方配置"}
         </Button>
       </div>
       <Card className="secondary-card experimental-features-card">
+        <div
+          className={`experimental-runtime-check ${runtimeCheckTone}`}
+          aria-live="polite"
+        >
+          <span className="experimental-runtime-check-label">自检</span>
+          <span className="experimental-runtime-check-text">
+            {runtimeCheckText}
+          </span>
+        </div>
         <div className="feature-grid">
           {EXPERIMENTAL_FEATURES.map((feature) => {
             const enabled = config.experimentalFeatures[feature.configKey];
             return (
-              <div className={`feature-card ${enabled ? "active" : ""}`} key={feature.flag}>
+              <div
+                className={`feature-card ${enabled ? "active" : ""}`}
+                key={feature.flag}
+              >
                 <div className="feature-card-header">
                   <div className="experimental-feature-heading">
                     <strong>{feature.label}</strong>
@@ -987,13 +1198,15 @@ export function ExperimentalFeaturesCard({
                   <Switch
                     checked={enabled}
                     disabled={isBusy}
-                    onCheckedChange={(checked) => onConfigChange({
-                      ...config,
-                      experimentalFeatures: {
-                        ...config.experimentalFeatures,
-                        [feature.configKey]: checked,
-                      },
-                    })}
+                    onCheckedChange={(checked) =>
+                      onConfigChange({
+                        ...config,
+                        experimentalFeatures: {
+                          ...config.experimentalFeatures,
+                          [feature.configKey]: checked,
+                        },
+                      })
+                    }
                     aria-label={`${enabled ? "关闭" : "开启"}${feature.label}`}
                   />
                 </div>
@@ -1053,12 +1266,16 @@ export function FeaturePolicyCard({
       </div>
       <Card className="secondary-card runtime-card">
         <div className="feature-grid">
-          <div className={`feature-card ${config.slimCodexPet ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.slimCodexPet ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>精简 Codex 宠物模块</strong>
               <Switch
                 checked={config.slimCodexPet}
-                onCheckedChange={(checked) => onConfigChange({ ...config, slimCodexPet: checked })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({ ...config, slimCodexPet: checked })
+                }
                 aria-label="精简 Codex 宠物模块"
               />
             </div>
@@ -1071,12 +1288,16 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card ${config.slimCodexVoice ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.slimCodexVoice ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>精简 Codex 语音模块</strong>
               <Switch
                 checked={config.slimCodexVoice}
-                onCheckedChange={(checked) => onConfigChange({ ...config, slimCodexVoice: checked })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({ ...config, slimCodexVoice: checked })
+                }
                 aria-label="精简 Codex 语音模块"
               />
             </div>
@@ -1089,7 +1310,9 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card gpu-mode-card ${!isMacClient && gpuLaunchMode.value !== "off" ? "active" : ""}`}>
+          <div
+            className={`feature-card gpu-mode-card ${!isMacClient && gpuLaunchMode.value !== "off" ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <div className="feature-card-title">
                 <strong>GPU 渲染模式</strong>
@@ -1117,10 +1340,12 @@ export function FeaturePolicyCard({
                         name="codey-gpu-launch-mode"
                         value={mode.value}
                         checked={gpuLaunchMode.value === mode.value}
-                        onChange={() => onConfigChange({
-                          ...config,
-                          gpuLaunchMode: mode.value,
-                        })}
+                        onChange={() =>
+                          onConfigChange({
+                            ...config,
+                            gpuLaunchMode: mode.value,
+                          })
+                        }
                       />
                       <span>{mode.label}</span>
                     </label>
@@ -1139,15 +1364,19 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card ${config.fastCodexStartup ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.fastCodexStartup ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>Codex 慢启动保护</strong>
               <Switch
                 checked={config.fastCodexStartup}
-                onCheckedChange={(checked) => onConfigChange({
-                  ...config,
-                  fastCodexStartup: checked,
-                })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({
+                    ...config,
+                    fastCodexStartup: checked,
+                  })
+                }
                 aria-label="启用 Codex 慢启动保护"
               />
             </div>
@@ -1160,12 +1389,16 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card ${config.fastContextTools ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.fastContextTools ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>FastCtx 上下文工具</strong>
               <Switch
                 checked={config.fastContextTools}
-                onCheckedChange={(checked) => onConfigChange({ ...config, fastContextTools: checked })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({ ...config, fastContextTools: checked })
+                }
                 aria-label="启用 FastCtx 上下文工具"
               />
             </div>
@@ -1178,15 +1411,19 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card ${config.disableTraceLogWrites ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.disableTraceLogWrites ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>Trace 日志写盘保护</strong>
               <Switch
                 checked={config.disableTraceLogWrites}
-                onCheckedChange={(checked) => onConfigChange({
-                  ...config,
-                  disableTraceLogWrites: checked,
-                })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({
+                    ...config,
+                    disableTraceLogWrites: checked,
+                  })
+                }
                 aria-label="启用 Codex Trace 日志写盘保护"
               />
             </div>
@@ -1195,7 +1432,9 @@ export function FeaturePolicyCard({
             </div>
           </div>
 
-          <div className={`feature-card ${config.subagentOptimization ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.subagentOptimization ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <div className="feature-card-title">
                 <strong>子代理协作优化</strong>
@@ -1205,7 +1444,9 @@ export function FeaturePolicyCard({
                 checked={config.subagentOptimization}
                 disabled={isBusy}
                 aria-busy={busy === "check-subagent-model"}
-                onCheckedChange={(checked) => onSubagentOptimizationChange(checked)}
+                onCheckedChange={(checked) =>
+                  onSubagentOptimizationChange(checked)
+                }
                 aria-label="启用子代理协作优化"
               />
             </div>
@@ -1214,18 +1455,22 @@ export function FeaturePolicyCard({
                 {busy === "check-subagent-model"
                   ? `正在校验当前线路是否支持 ${subagentModel}`
                   : config.subagentOptimization
-                  ? "启用v2并行配置"
-                  : "保持 Codex 默认子代理配置，不注入协作提示词"}
+                    ? "启用v2并行配置"
+                    : "保持 Codex 默认子代理配置，不注入协作提示词"}
               </small>
             </div>
           </div>
 
-          <div className={`feature-card ${config.hideFullAccessWarning ? "active" : ""}`}>
+          <div
+            className={`feature-card ${config.hideFullAccessWarning ? "active" : ""}`}
+          >
             <div className="feature-card-header">
               <strong>屏蔽完全访问安全提示</strong>
               <Switch
                 checked={config.hideFullAccessWarning}
-                onCheckedChange={(checked) => onConfigChange({ ...config, hideFullAccessWarning: checked })}
+                onCheckedChange={(checked) =>
+                  onConfigChange({ ...config, hideFullAccessWarning: checked })
+                }
                 aria-label="屏蔽完全访问安全提示"
               />
             </div>
@@ -1278,7 +1523,9 @@ export function WebhookCard({
       </div>
       <Card className="secondary-card notification-card">
         <div className="notification-title">
-          <span><BellRing size={16} /></span>
+          <span>
+            <BellRing size={16} />
+          </span>
           <div>
             <strong>飞书机器人 Webhook</strong>
             <small>发送完成、失败和等待介入提醒</small>
@@ -1291,7 +1538,9 @@ export function WebhookCard({
               <Send size={15} aria-hidden="true" />
               <Input
                 value={config.webhook.url}
-                onChange={(event) => onWebhookChange({ url: event.target.value })}
+                onChange={(event) =>
+                  onWebhookChange({ url: event.target.value })
+                }
                 placeholder="https://open.feishu.cn/..."
                 spellCheck={false}
               />
@@ -1308,9 +1557,11 @@ export function WebhookCard({
             disabled={isBusy || !config.webhook.url.trim()}
             onClick={onTestWebhook}
           >
-            {busy === "test-webhook"
-              ? <LoaderCircle className="spinner" aria-hidden="true" />
-              : <Send aria-hidden="true" />}
+            {busy === "test-webhook" ? (
+              <LoaderCircle className="spinner" aria-hidden="true" />
+            ) : (
+              <Send aria-hidden="true" />
+            )}
             测试通知
           </Button>
         </div>

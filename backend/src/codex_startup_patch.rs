@@ -24,6 +24,29 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
   const disableVoice = __DISABLE_VOICE__;
   const fastCodexStartup = __FAST_CODEX_STARTUP__;
   const experimentalFeatureOverrides = __EXPERIMENTAL_FEATURE_OVERRIDES__;
+  const codeyExperimentalFeatureKeyMap = {
+    unified_exec: "unifiedExec",
+    shell_snapshot: "shellSnapshot",
+    responses_websockets_v2: "responsesWebsocketsV2",
+    tool_search_always_defer_mcp_tools: "toolSearchAlwaysDeferMcpTools",
+    standalone_web_search: "standaloneWebSearch",
+    enable_request_compression: "enableRequestCompression",
+    remote_compaction_v2: "remoteCompactionV2",
+    apply_patch_streaming_events: "applyPatchStreamingEvents",
+    concurrent_reasoning_summaries: "concurrentReasoningSummaries",
+  };
+  const toCodeyExperimentalFeatures = (values) => {
+    const result = {};
+    for (const [flag, configKey] of Object.entries(codeyExperimentalFeatureKeyMap)) {
+      const value = values?.[flag];
+      if (typeof value === "boolean") result[configKey] = value;
+    }
+    return result;
+  };
+  const codeyExperimentalFeatureConfigured =
+    toCodeyExperimentalFeatures(experimentalFeatureOverrides);
+  const codeyExperimentalFeatureKeyMapLiteral =
+    JSON.stringify(codeyExperimentalFeatureKeyMap);
   const statsigBootstrapTimeoutMs = 1500;
   const statsigStartupRemainingMs =
     `Math.max(0,(globalThis.__CODEY_STATSIG_STARTUP_DEADLINE_MS__??=Date.now()+${statsigBootstrapTimeoutMs})-Date.now())`;
@@ -201,7 +224,7 @@ const STARTUP_PATCH_TEMPLATE: &str = r#"
         patched,
         /(\b([$A-Z_a-z][$\w]*)\s*=\s*\{\.\.\.[$A-Z_a-z][$\w]*,\.\.\.[$A-Z_a-z][$\w]*,\[[$A-Z_a-z][$\w]*\]:[$A-Z_a-z][$\w]*\([$A-Z_a-z][$\w]*,`2380644311`\)\}\s*;\s*)return/g,
         (_match, assignment, resultName) =>
-          `${assignment}${resultName}={...${resultName},...${JSON.stringify(experimentalFeatureOverrides)}};return`,
+          `${assignment}${resultName}={...${resultName},...${JSON.stringify(experimentalFeatureOverrides)}};globalThis.__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__={status:"effective",updatedAt:Date.now(),configuredFeatures:${JSON.stringify(codeyExperimentalFeatureConfigured)},effectiveFeatures:((values)=>{const map=${codeyExperimentalFeatureKeyMapLiteral},result={};for(const flag of Object.keys(map)){const value=values?.[flag];if(typeof value==="boolean")result[map[flag]]=value}return result})(${resultName})};return`,
         "experimental feature overrides",
       );
     }
