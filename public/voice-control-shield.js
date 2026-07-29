@@ -1,7 +1,8 @@
 (() => {
-  window.__codeyVoiceControlShieldCleanup?.();
-
   const enabled = "__CODEY_SLIM_VOICE__" === "true";
+  const preserveBlockedControls = enabled && window.__codeyVoiceControlShield?.enabled === true;
+  window.__codeyVoiceControlShieldCleanup?.({ restoreControls: !preserveBlockedControls });
+
   const voiceControlIds = new Set([
     "codex.command.composer.startDictation",
     "codex.command.composer.startVoiceMode",
@@ -55,6 +56,8 @@
   const gptVoicePromotionAssetPattern = /(?:^|\/)[^/?#]*(?:bidi[^/?#]*banner|voice[^/?#]*banner)[^/?#]*\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)/i;
   const voiceControlSelector =
     "button, [role=button], [role=menuitem], [role=option], [role=switch], input, label";
+  const mutationCandidateSelector = `${voiceControlSelector}, img`;
+  const blockedElementStateKey = "__codeyVoiceControlOriginalState";
   const restoreResourceGuards = [];
   const blockedElementStates = new Map();
 
@@ -246,19 +249,46 @@
       && String(element.style.display || "").startsWith("none")
       && (!("disabled" in element) || element.disabled);
 
-  const blockElement = (element) => {
-    if (fullyBlocked(element)) return;
-    if (!blockedElementStates.has(element)) {
-      blockedElementStates.set(element, {
-        attributes: new Map(
-          ["data-codey-voice-control-blocked", "aria-hidden", "tabindex", "inert"]
-            .map((name) => [name, element.getAttribute(name)]),
-        ),
-        disabled: "disabled" in element ? element.disabled : undefined,
-        display: element.style.getPropertyValue?.("display") ?? element.style.display ?? "",
-        displayPriority: element.style.getPropertyPriority?.("display") ?? "",
+  const captureBlockedElementState = (element) => ({
+    attributes: new Map(
+      ["data-codey-voice-control-blocked", "aria-hidden", "tabindex", "inert"]
+        .map((name) => [name, element.getAttribute(name)]),
+    ),
+    disabled: "disabled" in element ? element.disabled : undefined,
+    display: element.style.getPropertyValue?.("display") ?? element.style.display ?? "",
+    displayPriority: element.style.getPropertyPriority?.("display") ?? "",
+  });
+
+  const setStoredBlockedElementState = (element, state) => {
+    try {
+      Object.defineProperty(element, blockedElementStateKey, {
+        configurable: true,
+        value: state,
       });
+    } catch {
+      try {
+        element[blockedElementStateKey] = state;
+      } catch {}
     }
+  };
+
+  const clearStoredBlockedElementState = (element) => {
+    try {
+      delete element[blockedElementStateKey];
+    } catch {}
+  };
+
+  const rememberBlockedElement = (element) => {
+    if (!blockedElementStates.has(element)) {
+      const state = element[blockedElementStateKey] ?? captureBlockedElementState(element);
+      blockedElementStates.set(element, state);
+      if (!element[blockedElementStateKey]) setStoredBlockedElementState(element, state);
+    }
+  };
+
+  const blockElement = (element) => {
+    rememberBlockedElement(element);
+    if (fullyBlocked(element)) return;
     element.setAttribute("data-codey-voice-control-blocked", "true");
     element.setAttribute("aria-hidden", "true");
     element.setAttribute("tabindex", "-1");
@@ -280,6 +310,7 @@
     }
     if (state.disabled !== undefined) element.disabled = state.disabled;
     blockedElementStates.delete(element);
+    clearStoredBlockedElementState(element);
   };
 
   const restoreRepurposedVoiceControls = () => {
@@ -301,7 +332,13 @@
       root,
       voiceControlSelector,
     ).forEach((control) => {
-      if (!isVoiceControl(control)) return;
+      if (!isVoiceControl(control)) {
+        if (control[blockedElementStateKey]) {
+          rememberBlockedElement(control);
+          restoreBlockedElement(control);
+        }
+        return;
+      }
       const target = isGptVoicePromotionControl(control)
         ? findGptVoicePromotionRoot(control)
         : control;
@@ -338,6 +375,99 @@
     return;
   }
 
+  let controlObserver = null;
+  let flushTimer = 0;
+  let cancelPendingFlush = null;
+  const pendingRoots = new Set();
+  const pendingRootLimit = 64;
+
+  const addPendingRoot = (root) => {
+    if (!(root instanceof HTMLElement) || pendingRoots.has(root)) return;
+    const documentRoot = document.documentElement || document.body;
+    if (documentRoot && pendingRoots.has(documentRoot)) return;
+    if (pendingRoots.size >= pendingRootLimit && documentRoot) {
+      pendingRoots.clear();
+      pendingRoots.add(documentRoot);
+      return;
+    }
+    for (const pending of pendingRoots) {
+      if (pending.contains?.(root)) return;
+    }
+    for (const pending of [...pendingRoots]) {
+      if (root.contains?.(pending)) pendingRoots.delete(pending);
+    }
+    pendingRoots.add(root);
+  };
+
+  const flushPendingRoots = () => {
+    flushTimer = 0;
+    cancelPendingFlush = null;
+    if (!pendingRoots.size) return;
+    const roots = [...pendingRoots];
+    pendingRoots.clear();
+    for (const root of roots) {
+      if (root.isConnected === false) continue;
+      block(root);
+    }
+  };
+
+  const blockBeforePaint = (root) => {
+    if (!(root instanceof HTMLElement) || root.isConnected === false) return 0;
+    const hasControlCandidate =
+      root.matches?.(mutationCandidateSelector) || root.querySelector?.(mutationCandidateSelector);
+    return hasControlCandidate ? block(root) : 0;
+  };
+
+  const queueMutationRoot = (root) => {
+    if (!(root instanceof HTMLElement)) return;
+    if (blockBeforePaint(root) > 0) return;
+    addPendingRoot(root);
+  };
+
+  const schedulePendingFlush = () => {
+    if (flushTimer) return;
+    if (typeof window.requestAnimationFrame === "function") {
+      flushTimer = window.requestAnimationFrame(flushPendingRoots);
+      cancelPendingFlush = () => window.cancelAnimationFrame?.(flushTimer);
+      return;
+    }
+    if (typeof window.setTimeout !== "function") {
+      flushPendingRoots();
+      return;
+    }
+    flushTimer = window.setTimeout(flushPendingRoots, 0);
+    cancelPendingFlush = () => window.clearTimeout?.(flushTimer);
+  };
+
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    const mutationRoot = (node) => {
+      if (node instanceof HTMLElement) return node;
+      return node?.parentElement instanceof HTMLElement ? node.parentElement : null;
+    };
+    controlObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        const target = mutationRoot(mutation.target);
+        if (mutation.type === "attributes") {
+          const containingControl = target?.closest?.(mutationCandidateSelector);
+          if (containingControl) queueMutationRoot(containingControl);
+          continue;
+        }
+        const containingControl = target?.closest?.(mutationCandidateSelector);
+        if (containingControl) queueMutationRoot(containingControl);
+        for (const node of mutation.addedNodes || []) {
+          queueMutationRoot(mutationRoot(node));
+        }
+      }
+      if (pendingRoots.size) schedulePendingFlush();
+    });
+    controlObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["aria-label", "role", "title", "src"],
+      childList: true,
+      subtree: true,
+    });
+  }
+
   const stopVoiceControlEvent = (event) => {
     const control = event.target instanceof Element
       ? event.target.closest(voiceControlSelector)
@@ -357,14 +487,20 @@
     enabled,
     block,
     isVoiceControl,
+    observerInstalled: controlObserver !== null,
     resourceGuardsInstalled: restoreResourceGuards.length,
   });
-  window.__codeyVoiceControlShieldCleanup = () => {
+  window.__codeyVoiceControlShieldCleanup = (options = {}) => {
+    controlObserver?.disconnect();
+    if (flushTimer) cancelPendingFlush?.();
+    flushTimer = 0;
+    cancelPendingFlush = null;
+    pendingRoots.clear();
     eventNames.forEach((eventName) => {
       document.removeEventListener(eventName, stopVoiceControlEvent, true);
     });
     restoreResourceGuards.splice(0).reverse().forEach((restore) => restore());
-    restoreBlockedElements();
+    if (options?.restoreControls !== false) restoreBlockedElements();
     delete window.__codeyBlockNativeVoiceControls;
     delete window.__codeyVoiceControlShield;
     delete window.__codeyVoiceControlShieldCleanup;

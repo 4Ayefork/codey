@@ -9,11 +9,16 @@ const template = readFileSync(
 );
 
 class FakeElement {
-  constructor(text = "") {
+  constructor(text = "", isControl = true, children = [], isImage = false) {
     this.textContent = text;
     this.attributes = new Map();
+    this.children = children;
     this.disabled = false;
+    this.isConnected = true;
+    this.isControl = isControl;
+    this.isImage = isImage;
     this.parentElement = null;
+    this.removedStyleProperties = [];
     this.style = {
       getPropertyPriority: (name) => {
         const value = String(this.style[name] ?? "");
@@ -21,12 +26,16 @@ class FakeElement {
       },
       getPropertyValue: (name) => String(this.style[name] ?? "").replace(/:important$/, ""),
       removeProperty: (name) => {
+        this.removedStyleProperties.push(name);
         delete this.style[name];
       },
       setProperty: (name, value, priority) => {
         this.style[name] = priority ? `${value}:${priority}` : value;
       },
     };
+    children.forEach((child) => {
+      child.parentElement = this;
+    });
   }
 
   getAttribute(name) {
@@ -41,12 +50,45 @@ class FakeElement {
     this.attributes.delete(name);
   }
 
-  closest() {
-    return this;
+  closest(selector) {
+    let current = this;
+    while (current) {
+      if (current.matches?.(selector)) return current;
+      current = current.parentElement;
+    }
+    return null;
   }
 
-  querySelectorAll() {
-    return [];
+  contains(node) {
+    let current = node;
+    while (current) {
+      if (current === this) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  matches(selector = "") {
+    const selectors = selector.split(",").map((part) => part.trim()).filter(Boolean);
+    if (selectors.includes("img") && this.isImage) return true;
+    if (selectors.length === 1 && selectors[0] === "img") return this.isImage;
+    return this.isControl;
+  }
+
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  querySelectorAll(selector = "") {
+    const matches = [];
+    const visit = (node) => {
+      for (const child of node.children) {
+        if (child.matches?.(selector)) matches.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return matches;
   }
 }
 
@@ -69,7 +111,6 @@ function loadShield(enabled) {
     children: { props: { id: "composer.realtime.start" } },
   };
   const gptVoiceIcon = new FakeElement();
-  gptVoiceIcon.matches = () => true;
   gptVoiceIcon.__reactFiber$test = {
     memoizedProps: { className: "composer-icon-button" },
     return: {
@@ -90,14 +131,15 @@ function loadShield(enabled) {
   const gptVoiceBannerDismiss = new FakeElement();
   const gptVoicePromotion = new FakeElement(
     "Try ChatGPT Voice Coordinate tasks, connect tools, and explore ideas Start Voice",
+    false,
   );
   gptVoicePromotion.querySelectorAll = (selector) =>
     selector.includes("button") ? [gptVoiceBannerAction, gptVoiceBannerDismiss] : [];
-  const gptVoicePromotionVisual = new FakeElement();
+  const gptVoicePromotionVisual = new FakeElement("", false);
   gptVoicePromotionVisual.parentElement = gptVoicePromotion;
   gptVoiceBannerAction.parentElement = gptVoicePromotion;
   gptVoiceBannerDismiss.parentElement = gptVoicePromotion;
-  const gptVoicePromotionAsset = new FakeElement();
+  const gptVoicePromotionAsset = new FakeElement("", false, [], true);
   gptVoicePromotionAsset.setAttribute(
     "src",
     "https://persistent.oaistatic.com/voice/bidi-homepage-banner-orb.21107572.webp",
@@ -129,9 +171,26 @@ function loadShield(enabled) {
     unrelatedIcon,
   ];
   const listeners = new Map();
+  let mutationCallback = null;
+  let observerOptions = null;
+  let observerDisconnects = 0;
+  class FakeMutationObserver {
+    constructor(callback) {
+      mutationCallback = callback;
+    }
+
+    observe(_target, options) {
+      observerOptions = options;
+    }
+
+    disconnect() {
+      observerDisconnects += 1;
+    }
+  }
+  const documentElement = new FakeElement("", false);
   const document = {
     body: null,
-    documentElement: null,
+    documentElement,
     querySelectorAll: (selector) => selector === "img" ? [gptVoicePromotionAsset] : controls,
     addEventListener: (name, listener) => listeners.set(name, listener),
     removeEventListener: (name) => listeners.delete(name),
@@ -180,11 +239,58 @@ function loadShield(enabled) {
     WebSocket: NativeWebSocket,
   };
   window.window = window;
-  vm.runInNewContext(
-    template.replace("__CODEY_SLIM_VOICE__", enabled ? "true" : "false"),
-    { document, Element: FakeElement, HTMLElement: FakeElement, URL, window },
-  );
+  const pendingTimers = new Map();
+  const pendingAnimationFrames = new Map();
+  let nextTimerId = 1;
+  let nextAnimationFrameId = 1;
+  let scheduledFlushes = 0;
+  window.setTimeout = (callback) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    scheduledFlushes += 1;
+    pendingTimers.set(id, callback);
+    return id;
+  };
+  window.clearTimeout = (id) => {
+    pendingTimers.delete(id);
+  };
+  window.requestAnimationFrame = (callback) => {
+    const id = nextAnimationFrameId;
+    nextAnimationFrameId += 1;
+    scheduledFlushes += 1;
+    pendingAnimationFrames.set(id, callback);
+    return id;
+  };
+  window.cancelAnimationFrame = (id) => {
+    pendingAnimationFrames.delete(id);
+  };
+  const sandbox = {
+    document,
+    Element: FakeElement,
+    HTMLElement: FakeElement,
+    MutationObserver: FakeMutationObserver,
+    URL,
+    window,
+  };
+  const inject = (nextEnabled = enabled) => {
+    vm.runInNewContext(
+      template.replace("__CODEY_SLIM_VOICE__", nextEnabled ? "true" : "false"),
+      sandbox,
+    );
+  };
+  const runPendingAnimationFrames = () => {
+    const callbacks = [...pendingAnimationFrames.values()];
+    pendingAnimationFrames.clear();
+    callbacks.forEach((callback) => callback());
+  };
+  const runPendingTimers = () => {
+    const callbacks = [...pendingTimers.values()];
+    pendingTimers.clear();
+    callbacks.forEach((callback) => callback());
+  };
+  inject(enabled);
   return {
+    documentElement,
     enumerateDeviceCalls,
     fetchCalls,
     gptVoiceBannerAction,
@@ -197,14 +303,34 @@ function loadShield(enabled) {
     localizedNewVoiceChat,
     localizedTraditionalNewVoiceChat,
     mediaCalls,
+    mutationCallback,
     nativeEnumerateDevices,
     nativeFetch,
     nativeGetUserMedia,
     NativeRTCPeerConnection,
     NativeWebSocket,
+    observerOptions,
+    get observerDisconnects() {
+      return observerDisconnects;
+    },
+    get pendingAnimationFrameCount() {
+      return pendingAnimationFrames.size;
+    },
+    get pendingFlushCount() {
+      return pendingTimers.size + pendingAnimationFrames.size;
+    },
+    get pendingTimerCount() {
+      return pendingTimers.size;
+    },
     rtcPeerConnectionCalls,
+    runPendingAnimationFrames,
+    runPendingTimers,
+    get scheduledFlushes() {
+      return scheduledFlushes;
+    },
     semantic,
     settings,
+    inject,
     unrelated,
     unrelatedIcon,
     webSocketCalls,
@@ -254,6 +380,72 @@ test("voice slim mode blocks composer, settings, and localized voice controls", 
   });
   assert.equal(prevented, true);
   assert.equal(stopped, true);
+});
+
+test("voice slim mode blocks inserted voice controls before a deferred flush", () => {
+  const runtime = loadShield(true);
+  const dynamic = new FakeElement("语音");
+  const menu = new FakeElement("", false, [dynamic]);
+
+  runtime.mutationCallback([{
+    addedNodes: [menu],
+    target: runtime.documentElement,
+    type: "childList",
+  }]);
+
+  assert.equal(dynamic.getAttribute("data-codey-voice-control-blocked"), "true");
+  assert.equal(dynamic.getAttribute("aria-hidden"), "true");
+  assert.equal(dynamic.getAttribute("tabindex"), "-1");
+  assert.equal(dynamic.getAttribute("inert"), "");
+  assert.equal(dynamic.style.display, "none:important");
+  assert.equal(dynamic.disabled, true);
+  assert.equal(runtime.pendingFlushCount, 0);
+  assert.equal(runtime.observerOptions.attributes, true);
+  assert.deepEqual(
+    [...runtime.observerOptions.attributeFilter],
+    ["aria-label", "role", "title", "src"],
+  );
+  assert.equal(runtime.observerOptions.childList, true);
+  assert.equal(runtime.observerOptions.subtree, true);
+});
+
+test("voice slim mode preserves hidden controls across enabled reinjection", () => {
+  const runtime = loadShield(true);
+  const styleRestoresAfterFirstInject = runtime.semantic.removedStyleProperties.length;
+
+  runtime.inject(true);
+
+  assert.equal(runtime.semantic.getAttribute("data-codey-voice-control-blocked"), "true");
+  assert.equal(runtime.semantic.style.display, "none:important");
+  assert.equal(runtime.semantic.disabled, true);
+  assert.equal(runtime.semantic.removedStyleProperties.length, styleRestoresAfterFirstInject);
+  assert.equal(runtime.observerDisconnects, 1);
+  assert.equal(runtime.window.__codeyVoiceControlShield.enabled, true);
+
+  runtime.inject(false);
+
+  assert.equal(runtime.semantic.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.semantic.getAttribute("aria-hidden"), null);
+  assert.equal(runtime.semantic.getAttribute("tabindex"), null);
+  assert.equal(runtime.semantic.getAttribute("inert"), null);
+  assert.equal(runtime.semantic.style.display, undefined);
+  assert.equal(runtime.semantic.disabled, false);
+  assert.equal(runtime.window.__codeyVoiceControlShield.enabled, false);
+  assert.equal(runtime.window.navigator.mediaDevices.getUserMedia, runtime.nativeGetUserMedia);
+});
+
+test("enabled reinjection restores preserved controls that React repurposed", () => {
+  const runtime = loadShield(true);
+  runtime.semantic.__reactProps$test = {
+    children: { props: { id: "codex.command.somethingElse" } },
+  };
+
+  runtime.inject(true);
+
+  assert.equal(runtime.semantic.getAttribute("data-codey-voice-control-blocked"), null);
+  assert.equal(runtime.semantic.getAttribute("aria-hidden"), null);
+  assert.equal(runtime.semantic.style.display, undefined);
+  assert.equal(runtime.semantic.disabled, false);
 });
 
 test("disabling voice slim mode restores native voice controls", () => {
