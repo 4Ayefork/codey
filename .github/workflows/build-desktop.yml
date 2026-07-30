@@ -12,6 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_BUILD_BUILD_DIR: target
+  RUSTFLAGS: -D warnings
 
 jobs:
   macos:
@@ -45,6 +46,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -57,6 +60,15 @@ jobs:
 
       - name: JavaScript tests
         run: pnpm run test:js
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build unsigned macOS app
         env:
@@ -122,6 +134,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -138,6 +152,15 @@ jobs:
 
       - name: JavaScript tests
         run: pnpm run test:js
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Rust lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build Windows executable
         env:
