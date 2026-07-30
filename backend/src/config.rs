@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -375,13 +376,23 @@ impl ConfigStore {
             .ok_or_else(|| anyhow::anyhow!("Codey 配置路径无父目录"))?;
         fs::create_dir_all(parent)?;
         let bytes = serde_json::to_vec_pretty(&config)?;
+        let file_name = self
+            .path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("Codey 配置路径缺少文件名"))?
+            .to_string_lossy();
         let temp = parent.join(format!(
-            ".{}.tmp",
-            self.path.file_name().unwrap().to_string_lossy()
+            ".{file_name}.codey-{}.tmp",
+            Uuid::new_v4().simple()
         ));
-        fs::write(&temp, bytes)?;
-        atomic_replace(&temp, &self.path)
-            .with_context(|| format!("替换 Codey 配置失败：{}", self.path.display()))?;
+        let replace_result = write_private_temp(&temp, &bytes).and_then(|()| {
+            atomic_replace(&temp, &self.path)
+                .with_context(|| format!("替换 Codey 配置失败：{}", self.path.display()))
+        });
+        if replace_result.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        replace_result?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -389,6 +400,23 @@ impl ConfigStore {
         }
         Ok(())
     }
+}
+
+fn write_private_temp(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("创建 Codey 配置临时文件失败：{}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("写入 Codey 配置临时文件失败：{}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("同步 Codey 配置临时文件失败：{}", path.display()))
 }
 
 fn atomic_replace(temp: &Path, destination: &Path) -> std::io::Result<()> {
@@ -414,6 +442,36 @@ fn atomic_replace(temp: &Path, destination: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn config_temp_files_are_private_before_atomic_replace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".config.json.codey-test.tmp");
+
+        write_private_temp(&path, b"private-secret").unwrap();
+
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn config_save_does_not_leave_a_plaintext_temp_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path().join("config.json"));
+
+        store.save(&CodeyConfig::default()).unwrap();
+
+        let names = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, [std::ffi::OsString::from("config.json")]);
+    }
 
     #[test]
     fn normalizes_missing_active_profile() {
