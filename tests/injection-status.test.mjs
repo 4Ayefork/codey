@@ -11,6 +11,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     commands,
     runtimeCommands,
     app,
+    runtimeHook,
     overlay,
     types,
     sections,
@@ -22,6 +23,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
     readFile(new URL("backend/src/commands/runtime.rs", root), "utf8"),
     readFile(new URL("src/App.tsx", root), "utf8"),
+    readFile(new URL("src/useRuntimeStatus.ts", root), "utf8"),
     readFile(new URL("src/overlay.tsx", root), "utf8"),
     readFile(new URL("src/App.types.ts", root), "utf8"),
     readFile(new URL("src/OperationsPanel.tsx", root), "utf8"),
@@ -46,15 +48,15 @@ test("script injection diagnostics report runtime evidence without continuous po
     commands,
     /"refresh_injection_status"\s*=>\s*refresh_injection_status/,
   );
-  assert.match(app, /invoke\("refresh_injection_status"\)/);
-  assert.match(app, /if \(shouldRefreshInjectionStatus\)/);
-  assert.match(app, /codey-injection-status-changed/);
-  assert.match(app, /codey-settings-opened/);
+  assert.match(runtimeHook, /invoke\("refresh_injection_status"\)/);
+  assert.match(runtimeHook, /if \(shouldRefreshInjectionStatus\)/);
+  assert.match(runtimeHook, /codey-injection-status-changed/);
+  assert.match(runtimeHook, /codey-settings-opened/);
   assert.match(
     overlay,
     /window\.dispatchEvent\(new CustomEvent\(SETTINGS_OPENED_EVENT\)\)/,
   );
-  assert.match(app, /injectionStatusRefreshRef/);
+  assert.match(runtimeHook, /injectionStatusRefreshRef/);
   assert.match(cdp, /completedEntry\.status === \\"pending\\"/);
   assert.match(pluginFix, /markPluginBridgeEffective/);
   assert.match(pluginFix, /entry\.status = "effective"/);

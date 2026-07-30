@@ -39,6 +39,7 @@ import {
   getNotificationChannelDefinition,
   NotificationChannelsCard,
 } from "./notifications";
+import { useRuntimeStatus } from "./useRuntimeStatus";
 import type {
   NotificationChannel,
   NotificationChannelKind,
@@ -53,7 +54,6 @@ import type {
   ModelState,
   Notice,
   PluginMarketplaceStatus,
-  RuntimeStatus,
   TraceLogCleanup,
   UpdateCheck,
   UpdateDownload,
@@ -62,8 +62,6 @@ import { Badge, Button, Button as SaveButton } from "./components/semi";
 
 const Check = IconCheck;
 const X = IconX;
-const INJECTION_STATUS_CHANGED_EVENT = "codey-injection-status-changed";
-const SETTINGS_OPENED_EVENT = "codey-settings-opened";
 const UPDATE_AVAILABLE_EVENT = "codey-update-availability-changed";
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 12_000;
@@ -166,7 +164,8 @@ function useStableEvent<Args extends unknown[], Result>(
 export function App({ embedded = false, onClose }: AppProps) {
   const [config, setConfig] = useState<Config | null>(null);
   const persistedConfigRef = useRef<Config | null>(null);
-  const [status, setStatus] = useState<RuntimeStatus>({ running: false });
+  const { status, setStatus, refreshStatus, refreshStatusForLoad } =
+    useRuntimeStatus({ embedded });
   const [pluginMarketplaceStatus, setPluginMarketplaceStatus] =
     useState<PluginMarketplaceStatus | null>(null);
   const [ccSwitchStatus, setCcSwitchStatus] = useState<CcSwitchStatus | null>(
@@ -207,8 +206,6 @@ export function App({ embedded = false, onClose }: AppProps) {
     null,
   );
   const [traceSnapshotStale, setTraceSnapshotStale] = useState(false);
-  const injectionStatusRefreshRef = useRef<Promise<RuntimeStatus> | null>(null);
-  const settingsOpenRefreshRequestedRef = useRef(false);
   const updateCheckRef = useRef<UpdateCheck | null>(null);
   const autoUpdateCheckInFlightRef = useRef(false);
 
@@ -232,33 +229,6 @@ export function App({ embedded = false, onClose }: AppProps) {
   useEffect(() => {
     updateCheckRef.current = updateCheck;
   }, [updateCheck]);
-
-  useEffect(() => {
-    const handleInjectionStatusChanged = () => {
-      void refreshInjectionStatus().catch(() => {});
-    };
-    window.addEventListener(
-      INJECTION_STATUS_CHANGED_EVENT,
-      handleInjectionStatusChanged,
-    );
-    return () => {
-      window.removeEventListener(
-        INJECTION_STATUS_CHANGED_EVENT,
-        handleInjectionStatusChanged,
-      );
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleSettingsOpened = () => {
-      settingsOpenRefreshRequestedRef.current = true;
-      void refreshInjectionStatus().catch(() => {});
-    };
-    window.addEventListener(SETTINGS_OPENED_EVENT, handleSettingsOpened);
-    return () => {
-      window.removeEventListener(SETTINGS_OPENED_EVENT, handleSettingsOpened);
-    };
-  }, []);
 
   useEffect(() => {
     const applyDetectedUpdate = (
@@ -346,57 +316,6 @@ export function App({ embedded = false, onClose }: AppProps) {
     };
   }, [configLoaded, embedded]);
 
-  useEffect(() => {
-    if (!status.traceLogStats?.pending) return;
-    const delays = [250, 500, 1_000, 2_000, 5_000];
-    let cancelled = false;
-    let timer = 0;
-    let delayIndex = 0;
-    const poll = () => {
-      if (cancelled) return;
-      const delay = delays[delayIndex];
-      delayIndex = Math.min(delayIndex + 1, delays.length - 1);
-      timer = window.setTimeout(async () => {
-        try {
-          const next = await invoke<RuntimeStatus>("runtime_status");
-          if (cancelled) return;
-          setStatus(next);
-          if (next.traceLogStats?.pending) poll();
-        } catch {
-          poll();
-        }
-      }, delay);
-    };
-    poll();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [status.traceLogStats?.pending]);
-
-  useEffect(() => {
-    if (!status.restartInProgress) return;
-    let cancelled = false;
-    let timer = 0;
-    const poll = () => {
-      timer = window.setTimeout(async () => {
-        try {
-          const next = await invoke<RuntimeStatus>("runtime_status");
-          if (cancelled) return;
-          setStatus(next);
-          if (next.restartInProgress) poll();
-        } catch {
-          if (!cancelled) poll();
-        }
-      }, 500);
-    };
-    poll();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [status.restartInProgress]);
-
   async function load() {
     try {
       const result = await invoke<{
@@ -409,12 +328,8 @@ export function App({ embedded = false, onClose }: AppProps) {
       setPersistedConfig(result.config);
       setCcSwitchStatus(result.ccSwitch ?? null);
       if (result.modelState) setModelState(result.modelState);
-      const shouldRefreshInjectionStatus =
-        !embedded || !settingsOpenRefreshRequestedRef.current;
       const [next] = await Promise.all([
-        shouldRefreshInjectionStatus
-          ? refreshInjectionStatus()
-          : refreshStatus(),
+        refreshStatusForLoad(),
         refreshPluginMarketplaceStatus(),
       ]);
       const startupError = next.startupError || result.startupError;
@@ -436,36 +351,6 @@ export function App({ embedded = false, onClose }: AppProps) {
     } catch (error) {
       setNotice({ tone: "error", text: errorText(error) });
     }
-  }
-
-  async function refreshStatus() {
-    const next = await requestRuntimeStatus(false);
-    setStatus(next);
-    return next;
-  }
-
-  async function requestRuntimeStatus(shouldRefreshInjectionStatus: boolean) {
-    if (shouldRefreshInjectionStatus) {
-      await invoke("refresh_injection_status");
-    }
-    return invoke<RuntimeStatus>("runtime_status");
-  }
-
-  function refreshInjectionStatus() {
-    if (injectionStatusRefreshRef.current)
-      return injectionStatusRefreshRef.current;
-    const refresh = requestRuntimeStatus(true)
-      .then((next) => {
-        setStatus(next);
-        return next;
-      })
-      .finally(() => {
-        if (injectionStatusRefreshRef.current === refresh) {
-          injectionStatusRefreshRef.current = null;
-        }
-      });
-    injectionStatusRefreshRef.current = refresh;
-    return refresh;
   }
 
   async function refreshPluginMarketplaceStatus() {
