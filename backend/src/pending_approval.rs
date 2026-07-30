@@ -80,6 +80,7 @@ struct ParsedRolloutEvents {
     started_turns: Vec<String>,
     aborted_turns: Vec<String>,
     completed_turns: Vec<(String, u128, Option<i64>, Option<String>)>,
+    snapshot_replay_turns: HashSet<String>,
     turn_configurations: HashMap<String, TurnConfiguration>,
     status: SessionLifecycleStatus,
 }
@@ -99,6 +100,8 @@ struct RolloutParseState {
     /// re-parse instead of appending to stale state.
     tail_fingerprint: Vec<u8>,
     is_subagent: bool,
+    forked_session_id: Option<String>,
+    replaying_fork_history: bool,
     current_turn_id: String,
     waiting_calls: HashMap<String, String>,
     terminal_turns: HashSet<String>,
@@ -172,8 +175,11 @@ impl RolloutParseState {
             return;
         };
         match record.get("type").and_then(Value::as_str) {
-            Some("session_meta") if is_subagent_payload(payload) => {
-                self.is_subagent = true;
+            Some("session_meta") => {
+                if is_subagent_payload(payload) {
+                    self.is_subagent = true;
+                }
+                self.observe_session_meta(payload);
             }
             Some("turn_context") => {
                 if let Some(turn_id) = payload.get("turn_id").and_then(Value::as_str) {
@@ -220,6 +226,11 @@ impl RolloutParseState {
                     Some("task_complete") => {
                         self.terminal_turns.insert(turn_id.to_string());
                         self.active_turns.remove(turn_id);
+                        if self.replaying_fork_history {
+                            self.events
+                                .snapshot_replay_turns
+                                .insert(turn_id.to_string());
+                        }
                         let error = task_completion_error(payload);
                         self.latest_terminal = if error.is_some() {
                             SessionLifecycleStatus::Error
@@ -273,6 +284,31 @@ impl RolloutParseState {
                 _ => {}
             },
             _ => {}
+        }
+    }
+
+    fn observe_session_meta(&mut self, payload: &Value) {
+        let session_id = payload
+            .get("id")
+            .or_else(|| payload.get("session_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty());
+        let is_fork_header = payload
+            .get("forked_from_id")
+            .and_then(Value::as_str)
+            .is_some_and(|parent_id| !parent_id.trim().is_empty());
+
+        if self.forked_session_id.is_none() && is_fork_header {
+            self.forked_session_id = session_id.map(ToString::to_string);
+        }
+        if let (Some(forked_session_id), Some(session_id)) =
+            (self.forked_session_id.as_deref(), session_id)
+        {
+            // A fork rollout starts with its new header, replays one or more
+            // ancestor session snapshots, then writes the new header again
+            // before live events continue.
+            self.replaying_fork_history = session_id != forked_session_id;
         }
     }
 
@@ -467,7 +503,7 @@ impl RecentSessionEventCache {
             else {
                 continue;
             };
-            let is_snapshot_replay = rollout_path
+            let rollout_is_snapshot_replay = rollout_path
                 .parent()
                 .and_then(Path::file_name)
                 .is_some_and(|directory| directory == "imported");
@@ -508,12 +544,13 @@ impl RecentSessionEventCache {
                 .completed_turns
                 .extend(parsed.completed_turns.iter().cloned().map(
                     |(turn_id, duration_ms, completed_at, error)| CompletedTurn {
+                        is_snapshot_replay: rollout_is_snapshot_replay
+                            || parsed.snapshot_replay_turns.contains(&turn_id),
                         session_id: session_id.clone(),
                         turn_id,
                         duration_ms,
                         completed_at,
                         error,
-                        is_snapshot_replay,
                     },
                 ));
             events
@@ -841,6 +878,37 @@ mod tests {
         assert_eq!(
             session_lifecycle_status_in_rollout(rollout, &[]),
             SessionLifecycleStatus::Idle
+        );
+    }
+
+    #[test]
+    fn forked_rollouts_only_mark_inherited_completions_as_snapshot_replays() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("rollout-fork.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"
+{"type":"session_meta","payload":{"id":"fork","session_id":"fork","forked_from_id":"parent"}}
+{"type":"session_meta","payload":{"id":"parent","session_id":"parent","forked_from_id":"grandparent"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"inherited"}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"inherited","completed_at":300}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"live"}}
+{"type":"session_meta","payload":{"id":"fork","session_id":"fork","forked_from_id":"parent"}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"live","completed_at":301}}
+"#,
+        )
+        .unwrap();
+        let mut cache = RecentSessionEventCache::default();
+
+        let events = cache.refresh_rollouts(vec![("fork".to_string(), rollout_path.to_path_buf())]);
+
+        assert_eq!(
+            events
+                .completed_turns
+                .iter()
+                .map(|turn| (turn.turn_id.as_str(), turn.is_snapshot_replay))
+                .collect::<Vec<_>>(),
+            vec![("inherited", true), ("live", false)]
         );
     }
 
