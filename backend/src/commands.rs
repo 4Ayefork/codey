@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(windows)]
 use codey_runtime_core::app_paths::resolve_codex_app_dir_with_saved;
 use codey_runtime_core::app_paths::{build_codex_executable, normalize_codex_app_path};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::join_all};
 use reqwest::header::USER_AGENT;
 use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -29,6 +29,7 @@ use crate::launcher::{CODEX_APP_NOT_FOUND_ERROR, CODEX_APP_PATH_INVALID_ERROR};
 use crate::launcher::{CodeyRuntime, restore_previous_runtime_state, restore_runtime_config};
 use crate::message_delete::delete_messages;
 use crate::model_catalog;
+use crate::notifications::{NotificationChannelConfig, NotificationDispatcher, NotificationEvent};
 use crate::pending_approval;
 use crate::pending_approval::{CompletedTurn, RecentSessionEvents, SessionLifecycleStatus};
 use crate::plugin_marketplace;
@@ -38,7 +39,6 @@ use crate::session_metadata;
 use crate::session_transfer;
 use crate::trace_log_guard;
 use crate::trace_log_stats::{self, TraceLogStatsHandle, TraceLogStatsSnapshot};
-use crate::webhook::{WebhookDispatcher, WebhookEvent};
 
 pub struct AppState {
     pub store: ConfigStore,
@@ -440,35 +440,35 @@ fn save_waiting_notification_ledger(
 ) -> Result<(), String> {
     let parent = path
         .parent()
-        .ok_or_else(|| "飞书通知记录路径无父目录".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| format!("创建飞书通知记录目录失败：{error}"))?;
+        .ok_or_else(|| "消息通知记录路径无父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建消息通知记录目录失败：{error}"))?;
     let mut notification_keys = notification_keys.iter().cloned().collect::<Vec<_>>();
     notification_keys.sort();
     let bytes = serde_json::to_vec_pretty(&WaitingNotificationLedger { notification_keys })
-        .map_err(|error| format!("序列化飞书通知记录失败：{error}"))?;
+        .map_err(|error| format!("序列化消息通知记录失败：{error}"))?;
     let temp = parent.join(format!(
         ".{}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy()
     ));
-    fs::write(&temp, bytes).map_err(|error| format!("写入飞书通知记录失败：{error}"))?;
+    fs::write(&temp, bytes).map_err(|error| format!("写入消息通知记录失败：{error}"))?;
     if let Err(error) = fs::rename(&temp, path) {
         #[cfg(windows)]
         if path.exists() {
             fs::remove_file(path)
-                .map_err(|remove_error| format!("替换飞书通知记录失败：{remove_error}"))?;
+                .map_err(|remove_error| format!("替换消息通知记录失败：{remove_error}"))?;
             fs::rename(&temp, path)
-                .map_err(|rename_error| format!("替换飞书通知记录失败：{rename_error}"))?;
+                .map_err(|rename_error| format!("替换消息通知记录失败：{rename_error}"))?;
         } else {
-            return Err(format!("替换飞书通知记录失败：{error}"));
+            return Err(format!("替换消息通知记录失败：{error}"));
         }
         #[cfg(not(windows))]
-        return Err(format!("替换飞书通知记录失败：{error}"));
+        return Err(format!("替换消息通知记录失败：{error}"));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("保护飞书通知记录失败：{error}"))?;
+            .map_err(|error| format!("保护消息通知记录失败：{error}"))?;
     }
     Ok(())
 }
@@ -790,7 +790,13 @@ pub async fn invoke_api(state: &Arc<AppState>, command: &str, args: Value) -> Va
         "launch_codey" => launch_codey_runtime(state).await,
         "restart_codey" => schedule_restart_codey_runtime(state).await,
         "clear_codex_trace_logs" => clear_codex_trace_logs(state).await,
-        "test_webhook" => test_webhook(state).await,
+        "test_webhook" => {
+            let channel_id = args
+                .get("channelId")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            test_webhook(state, channel_id).await
+        }
         "check_for_updates" => check_for_updates(state).await,
         "download_update" => download_update(state).await,
         "install_downloaded_update" => match string_argument(&args, "filePath") {
@@ -917,12 +923,15 @@ async fn set_codex_app_path(state: &Arc<AppState>, path: String) -> Result<Value
 
 pub async fn save_codey_config(
     state: &Arc<AppState>,
-    config_input: CodeyConfig,
+    mut config_input: CodeyConfig,
 ) -> Result<Value, String> {
     let previous = state.config.read().await.clone();
     // Provider records, credentials and model-selection caches are read-only
     // through this general settings endpoint.
     let mut config = previous.clone();
+    config_input
+        .webhook
+        .merge_redacted_secrets(&previous.webhook);
     config.webhook = config_input.webhook;
     config.codex_app_path = config_input.codex_app_path;
     config.user_scripts = config_input.user_scripts;
@@ -1336,6 +1345,10 @@ fn redacted_config(config: &CodeyConfig) -> CodeyConfig {
     for profile in &mut public.profiles {
         profile.api_key.clear();
     }
+    for channel in &mut public.webhook.channels {
+        channel.bot_token_configured = !channel.bot_token.trim().is_empty();
+        channel.bot_token.clear();
+    }
     public
 }
 
@@ -1734,8 +1747,10 @@ mod restart_tests {
     fn live_config_changes_do_not_require_restart() {
         let applied = CodeyConfig::default();
         let mut current = applied.clone();
-        current.webhook.enabled = true;
-        current.webhook.url = "https://example.test/webhook".into();
+        current.webhook.channels.push(NotificationChannelConfig {
+            url: "https://example.test/webhook".into(),
+            ..NotificationChannelConfig::default()
+        });
         current.disable_trace_log_writes = !current.disable_trace_log_writes;
 
         assert!(!config_requires_restart(&applied, &current));
@@ -1830,7 +1845,7 @@ mod restart_tests {
 }
 
 fn webhook_watcher_should_run(config: &CodeyConfig) -> bool {
-    config.webhook.enabled && !config.webhook.url.trim().is_empty()
+    config.webhook.has_enabled_channel()
 }
 
 async fn sync_waiting_webhook_watcher(state: &Arc<AppState>, config: &CodeyConfig) {
@@ -1912,7 +1927,7 @@ async fn start_waiting_webhook_watcher(
                     Err(error) => {
                         // Keep the running edge so a transient delivery failure is retried.
                         completion_delivery_pending = true;
-                        eprintln!("Codey 飞书完成通知失败：{error}");
+                        eprintln!("Codey 完成通知失败：{error}");
                     }
                 }
             }
@@ -1944,7 +1959,7 @@ async fn notify_pending_approvals(state: &Arc<AppState>, events: &RecentSessionE
             "reasoningEffort": reasoning_effort,
         });
         if let Err(error) = notify_webhook_waiting(state, &payload).await {
-            eprintln!("Codey 飞书等待通知失败：{error}");
+            eprintln!("Codey 等待通知失败：{error}");
         }
     }
 }
@@ -1995,9 +2010,24 @@ async fn stop_waiting_webhook_watcher(state: &Arc<AppState>) {
     }
 }
 
-pub async fn test_webhook(state: &Arc<AppState>) -> Result<Value, String> {
+pub async fn test_webhook(
+    state: &Arc<AppState>,
+    channel_id: Option<String>,
+) -> Result<Value, String> {
     let webhook = state.config.read().await.webhook.clone();
-    let dispatcher = WebhookDispatcher::with_client(state.http_client.clone(), webhook);
+    let channel = match channel_id.as_deref().map(str::trim) {
+        Some(channel_id) if !channel_id.is_empty() => webhook
+            .channels
+            .into_iter()
+            .find(|channel| channel.id == channel_id)
+            .ok_or_else(|| "找不到要测试的通知渠道".to_string())?,
+        _ => webhook
+            .channels
+            .into_iter()
+            .next()
+            .ok_or_else(|| "请先添加通知渠道".to_string())?,
+    };
+    let dispatcher = NotificationDispatcher::with_client(state.http_client.clone(), channel);
     dispatcher.test().await.map_err(|error| error.to_string())
 }
 
@@ -2460,7 +2490,7 @@ async fn webhook_session_name(state: &Arc<AppState>, payload: &Value, session_id
     {
         Ok(session_name) => session_name,
         Err(error) => {
-            eprintln!("读取 webhook 会话名称任务异常退出：{error}");
+            eprintln!("读取通知会话名称任务异常退出：{error}");
             fallback_title
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| "未命名会话".to_string())
@@ -2485,6 +2515,60 @@ async fn terminal_notification_was_sent(
     keys.iter().any(|key| sent.contains(key))
 }
 
+async fn dispatch_webhook_channels(
+    state: &Arc<AppState>,
+    channels: Vec<NotificationChannelConfig>,
+    event: &NotificationEvent,
+    notification_key: &str,
+) -> Result<(), String> {
+    let configured_channels = channels
+        .into_iter()
+        .filter(|channel| channel.enabled && channel.is_configured())
+        .map(|channel| {
+            let delivery_key = format!("channel:{}:{notification_key}", channel.id);
+            (channel, delivery_key)
+        })
+        .collect::<Vec<_>>();
+    let deliveries = {
+        let sent = state.webhook_notifications.lock().await;
+        configured_channels
+            .into_iter()
+            .filter(|(_, delivery_key)| !sent.contains(delivery_key))
+            .collect::<Vec<_>>()
+    };
+    let deliveries = deliveries.into_iter().map(|(channel, delivery_key)| {
+        let client = state.http_client.clone();
+        let event = event.clone();
+        async move {
+            let dispatcher = NotificationDispatcher::with_client(client, channel);
+            (
+                delivery_key,
+                dispatcher
+                    .send(&event)
+                    .await
+                    .map_err(|error| error.to_string()),
+            )
+        }
+    });
+    let results = join_all(deliveries).await;
+    let mut errors = Vec::new();
+    let mut sent = state.webhook_notifications.lock().await;
+    for (delivery_key, result) in results {
+        match result {
+            Ok(()) => {
+                sent.insert(delivery_key);
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    drop(sent);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("部分通知渠道发送失败：{}", errors.join("；")))
+    }
+}
+
 async fn dispatch_settled_webhook_failure(
     state: &Arc<AppState>,
     payload: &Value,
@@ -2496,8 +2580,11 @@ async fn dispatch_settled_webhook_failure(
     duration_ms: u128,
     error: String,
 ) -> Result<Value, String> {
-    let webhook = state.config.read().await.webhook.clone();
-    if !webhook.enabled || webhook.url.trim().is_empty() {
+    let channels = state.config.read().await.webhook.channels.clone();
+    if !channels
+        .iter()
+        .any(|channel| channel.enabled && channel.is_configured())
+    {
         return Ok(json!({"status":"skipped","reason":"disabled"}));
     }
 
@@ -2512,9 +2599,8 @@ async fn dispatch_settled_webhook_failure(
         }
         sent.insert(failed_key.clone());
     }
-    let dispatcher = WebhookDispatcher::with_client(state.http_client.clone(), webhook);
     let session_name = webhook_session_name(state, payload, &session_id).await;
-    let event = WebhookEvent::new(
+    let event = NotificationEvent::new(
         "session.failed",
         session_id,
         profile_id,
@@ -2524,9 +2610,9 @@ async fn dispatch_settled_webhook_failure(
     )
     .with_session_name(session_name)
     .with_reasoning_effort(reasoning_effort);
-    if let Err(error) = dispatcher.send(&event).await {
+    if let Err(error) = dispatch_webhook_channels(state, channels, &event, &failed_key).await {
         state.webhook_notifications.lock().await.remove(&failed_key);
-        return Err(error.to_string());
+        return Err(error);
     }
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
@@ -2549,7 +2635,7 @@ async fn notify_webhook_completion(
         .trim()
         .to_string();
     if session_id.is_empty() || turn_id.is_empty() {
-        return Err("飞书任务完成通知缺少会话或轮次 ID".to_string());
+        return Err("任务完成通知缺少会话或轮次 ID".to_string());
     }
     let confirmed_by_rollout = payload
         .get("confirmedByRollout")
@@ -2574,17 +2660,20 @@ async fn notify_webhook_completion(
     if terminal_notification_was_sent(state, &session_id, &turn_id).await {
         return Ok(json!({"status":"duplicate"}));
     }
-    let (webhook, profile_id) = {
+    let (channels, profile_id) = {
         let config = state.config.read().await;
         (
-            config.webhook.clone(),
+            config.webhook.channels.clone(),
             config
                 .active_profile()
                 .map(|profile| profile.id)
                 .unwrap_or_default(),
         )
     };
-    if !webhook.enabled || webhook.url.trim().is_empty() {
+    if !channels
+        .iter()
+        .any(|channel| channel.enabled && channel.is_configured())
+    {
         return Ok(json!({"status":"skipped","reason":"disabled"}));
     }
     let requested_model = payload
@@ -2625,9 +2714,8 @@ async fn notify_webhook_completion(
         }
         sent.insert(notification_key.clone());
     }
-    let dispatcher = WebhookDispatcher::with_client(state.http_client.clone(), webhook);
     let session_name = webhook_session_name(state, payload, &session_id).await;
-    let event = WebhookEvent::new(
+    let event = NotificationEvent::new(
         "session.completed",
         session_id,
         profile_id,
@@ -2637,13 +2725,14 @@ async fn notify_webhook_completion(
     )
     .with_session_name(session_name)
     .with_reasoning_effort(reasoning_effort);
-    if let Err(error) = dispatcher.send(&event).await {
+    if let Err(error) = dispatch_webhook_channels(state, channels, &event, &notification_key).await
+    {
         state
             .webhook_notifications
             .lock()
             .await
             .remove(&notification_key);
-        return Err(error.to_string());
+        return Err(error);
     }
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
@@ -2657,7 +2746,7 @@ async fn notify_webhook_waiting(state: &Arc<AppState>, payload: &Value) -> Resul
         .trim_start_matches("local:")
         .to_string();
     if session_id.is_empty() {
-        return Err("飞书等待介入通知缺少会话 ID".to_string());
+        return Err("等待介入通知缺少会话 ID".to_string());
     }
     let turn_id = payload
         .get("turnId")
@@ -2684,17 +2773,20 @@ async fn notify_webhook_waiting(state: &Arc<AppState>, payload: &Value) -> Resul
         .unwrap_or_default();
     let (model, reasoning_effort) =
         webhook_session_configuration(requested_model, requested_reasoning_effort);
-    let (webhook, profile_id) = {
+    let (channels, profile_id) = {
         let config = state.config.read().await;
         (
-            config.webhook.clone(),
+            config.webhook.channels.clone(),
             config
                 .active_profile()
                 .map(|profile| profile.id)
                 .unwrap_or_default(),
         )
     };
-    if !webhook.enabled || webhook.url.trim().is_empty() {
+    if !channels
+        .iter()
+        .any(|channel| channel.enabled && channel.is_configured())
+    {
         return Ok(json!({"status":"skipped","reason":"disabled"}));
     }
 
@@ -2717,9 +2809,8 @@ async fn notify_webhook_waiting(state: &Arc<AppState>, payload: &Value) -> Resul
         }
         sent.insert(notification_key.clone());
     }
-    let dispatcher = WebhookDispatcher::with_client(state.http_client.clone(), webhook);
     let session_name = webhook_session_name(state, payload, &session_id).await;
-    let event = WebhookEvent::new(
+    let event = NotificationEvent::new(
         "session.waiting",
         session_id,
         profile_id,
@@ -2729,13 +2820,14 @@ async fn notify_webhook_waiting(state: &Arc<AppState>, payload: &Value) -> Resul
     )
     .with_session_name(session_name)
     .with_reasoning_effort(reasoning_effort);
-    if let Err(error) = dispatcher.send(&event).await {
+    if let Err(error) = dispatch_webhook_channels(state, channels, &event, &notification_key).await
+    {
         state
             .webhook_notifications
             .lock()
             .await
             .remove(&notification_key);
-        return Err(error.to_string());
+        return Err(error);
     }
     persist_waiting_notification(state, &notification_key).await?;
     Ok(json!({"status":"ok","eventId":event.event_id}))
@@ -2931,16 +3023,26 @@ mod tests {
     }
 
     #[test]
-    fn renderer_settings_clear_provider_api_keys() {
+    fn renderer_settings_clear_provider_and_notification_secrets() {
         let mut config = CodeyConfig::default();
         config.profiles[0].api_key = "renderer-secret".to_string();
         config.hide_full_access_warning = true;
+        config.webhook.channels.push(NotificationChannelConfig {
+            id: "telegram-1".to_string(),
+            kind: crate::notifications::NotificationChannelKind::Telegram,
+            bot_token: "telegram-secret".to_string(),
+            chat_id: "-100123".to_string(),
+            ..NotificationChannelConfig::default()
+        });
 
         let public = serde_json::to_value(redacted_config(&config)).unwrap();
 
         assert_eq!(public["profiles"][0]["apiKey"], "");
         assert_eq!(public["hideFullAccessWarning"], true);
+        assert_eq!(public["webhook"]["channels"][0]["botToken"], "");
+        assert_eq!(public["webhook"]["channels"][0]["botTokenConfigured"], true);
         assert!(!public.to_string().contains("renderer-secret"));
+        assert!(!public.to_string().contains("telegram-secret"));
     }
 
     #[test]
@@ -3549,6 +3651,30 @@ mod tests {
         imported.completed_turns[0].is_snapshot_replay = true;
 
         assert!(tracker.completion_candidates(&imported).is_empty());
+    }
+
+    #[test]
+    fn webhook_turn_tracker_ignores_fork_history_but_completes_the_live_branch_turn() {
+        let mut tracker =
+            WebhookTurnTracker::from_snapshot_at(&RecentSessionEvents::default(), 200);
+        let mut forked = lifecycle(
+            &[
+                ("session-fork", "turn-inherited"),
+                ("session-fork", "turn-live"),
+            ],
+            &[
+                ("session-fork", "turn-inherited"),
+                ("session-fork", "turn-live"),
+            ],
+        );
+        forked.completed_turns[0].completed_at = Some(300);
+        forked.completed_turns[0].is_snapshot_replay = true;
+        forked.completed_turns[1].completed_at = Some(301);
+
+        let candidates = tracker.completion_candidates(&forked);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].turn_id, "turn-live");
     }
 
     #[tokio::test]

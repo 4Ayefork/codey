@@ -96,6 +96,12 @@ Codey 将运行时 core/data crate 固定在 `vendor/CodeyRuntime`，生命周�
 - Codex App 路径：可在 Codey 配置界面填写；留空时使用 CodeyRuntime 的平台发现逻辑。Windows 自动发现失败或已保存路径失效时，会在启动阶段打开原生目录选择器并持久化规范化后的应用目录，因此自定义盘符不依赖尚未启动的 Codex 页面；目录解析兼容安装根目录下的 `app`、`bin`、`current` 与 `versions/current` 布局。
 - CDP 默认端口：`9229`，如 Windows 端口被占用会按 core 的逻辑选择可用回环端口。
 
+### 通知渠道扩展
+
+通知实现按“公共调度 + 渠道适配”拆分。后端 `backend/src/notifications/` 中的配置、事件、格式化和调度器不依赖具体渠道；每个发送渠道放在 `channels/` 的独立文件中，实现 `NotificationChannelAdapter`，并在 `channels/mod.rs` 注册。新增渠道时需要同时补齐渠道枚举与配置字段、请求构造、响应错误解析、传输错误脱敏及对应单元测试。
+
+前端 `src/notifications/` 以 `channelRegistry.tsx` 为唯一渠道注册入口，每个渠道使用独立编辑器组件；注册项负责显示信息、默认配置和完整性判断，公共列表只负责增删、启停和测试交互。外部配置结构继续使用 `webhook.channels`，测试命令继续使用 `test_webhook`，以兼容既有渲染层调用和持久化数据。涉及凭据的渠道还必须保持返回渲染层前脱敏、留空保存时回填旧值、显式清除时不回填。
+
 ## 启动与恢复
 
 打开 Codey 后不会创建常驻原生配置窗口；仅当 Windows 无法解析 Codex 应用路径时，启动阶段会显示一次系统目录选择器。Codey 会先迁移非法的内置 provider 覆盖、永久同步 rollout 与 SQLite、清理幽灵任务索引，再备份并临时应用当前 provider、修复插件市场、启动 Codex，最后通过 CDP 注入轻量控制脚本。Windows 上必须先从系统托盘完全退出已有 Codex，自动性能补丁才能在新主进程执行前安装；macOS 上启用宠物硬阉割时也必须先完全退出已有 Codex。首次点击 Codex header 中的 “Codey” 按钮时才会加载紧凑 React 浮层，配置操作通过本次 CDP bridge 发送给 Rust 进程。遮罩空白处、右上角关闭按钮和 `Esc` 都能关闭浮层。关闭这次由 Codey 拉起的 Codex 后，Codey 会终止该 Codex 的主进程、Helper、app-server 及后代进程树，恢复临时配置，再清理其他遗留 Codey 进程并自行退出；收到系统退出信号和安装更新时也执行同一套清理。会话 JSONL、数据库与索引清理结果不回滚。若 CDP 注入失败，Codey 会停止本次启动并输出错误，不会另起本地 Web 服务。
@@ -112,7 +118,7 @@ Codey 不改写 `auth.json`，因此 Codex 的账号栏仍会显示原来的官�
 - 内嵌 FastCtx 当前只发布文件读取、搜索、发现与批量替换工具，不发布其可选 Bash/后台任务组；PDF 引擎未编入 Codey，PDF 应继续使用 Codex 自带的 PDF 能力。
 - 第三方线路依赖 Codex 原生支持对应的 `wire_api`；Codey 不再提供 Responses/Chat Completions 协议转换。
 - 页面注入使用稳定的 `data-*`/`electronBridge.sendMessageFromView` 探测，Codex bundle 大幅改版时可能需要更新选择器适配层。
-- 飞书 `session.completed` 由真实 Codex turn 的完成状态触发，不再把单次模型 HTTP 响应误判为任务结束；失败通知与手动测试仍保留。机器人只配置 Webhook 地址，不保存或发送签名密钥；消息不包含 prompt、正文或 API Key，发送失败最多重试 3 次。
-- 首版明文 API Key 仅依赖文件权限保护，后续可把 `ConfigStore` 的 secret 存取替换为 macOS Keychain/Windows Credential Manager。
+- 消息通知按渠道列表保存，支持同时配置多个飞书 Webhook 与 Telegram Bot；旧版单飞书配置在读取时自动迁移。`session.completed` 由真实 Codex turn 的完成状态触发，不再把单次模型 HTTP 响应误判为任务结束；失败、等待介入与手动测试仍保留。自动通知会并发投递到所有已启用且配置完整的渠道，各渠道独立重试并汇总失败。飞书不保存或发送签名密钥；Telegram 使用 Bot Token 与 Chat ID，返回渲染层前会清空 Token 并通过配置状态保留已有凭据。所有通知消息都不包含 prompt、正文、内部会话 ID、线路 ID 或 API Key。
+- 首版明文 API Key 与 Telegram Bot Token 仅依赖配置文件权限保护，后续可把 `ConfigStore` 的 secret 存取替换为 macOS Keychain/Windows Credential Manager。
 
 FastCtx 集成基于 [yc-duan/fastctx](https://github.com/yc-duan/fastctx) `0.2.3` 的固定提交 `8056641`（MIT OR Apache-2.0）。

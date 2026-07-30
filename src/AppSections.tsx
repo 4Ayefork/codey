@@ -2,7 +2,6 @@ import { memo, type CSSProperties, useRef, useState } from "react";
 import {
   IconActivity as Activity,
   IconAdjustmentsHorizontal,
-  IconBell as BellRing,
   IconBrandWindows,
   IconClock,
   IconCode as Code,
@@ -18,7 +17,6 @@ import {
   IconLoader2 as LoaderCircle,
   IconPlugConnected as PlugZap,
   IconRefresh as RefreshCw,
-  IconSend,
   IconServer,
   IconShieldCheck,
   IconShoppingBag,
@@ -36,14 +34,13 @@ import type {
   UpdateCheck,
   UpdateDownload,
 } from "./App.types";
-import { Badge, Button, Card, Input, Switch, Tooltip } from "./components/semi";
+import { Badge, Button, Card, Switch, Tooltip } from "./components/semi";
 
 const Cpu = IconCpu;
 const Download = IconDownload;
 const FolderOpen = IconFolderOpen;
 const GitBranch = IconGitBranch;
 const History = IconHistory;
-const Send = IconSend;
 const Server = IconServer;
 
 const GPU_LAUNCH_MODES = [
@@ -1497,91 +1494,8 @@ function FeaturePolicyCardComponent({
   );
 }
 
-type WebhookCardProps = {
-  config: Config;
-  busy: string | null;
-  isBusy: boolean;
-  webhookResult: InlineResult;
-  onWebhookChange: (patch: Partial<Config["webhook"]>) => void;
-  onTestWebhook: () => void;
-};
-
-function WebhookCardComponent({
-  config,
-  busy,
-  isBusy,
-  webhookResult,
-  onWebhookChange,
-  onTestWebhook,
-}: WebhookCardProps) {
-  return (
-    <section className="secondary-section" aria-labelledby="notification-title">
-      <div className="section-title compact">
-        <div>
-          <h2 id="notification-title">飞书通知</h2>
-          <p>使用 Webhook 发送运行与会话提醒。</p>
-        </div>
-        <div className="enable-control">
-          <span>{config.webhook.enabled ? "已开启" : "已关闭"}</span>
-          <Switch
-            checked={config.webhook.enabled}
-            onCheckedChange={(checked) => onWebhookChange({ enabled: checked })}
-            aria-label="启用飞书通知"
-          />
-        </div>
-      </div>
-      <Card className="secondary-card notification-card">
-        <div className="notification-title">
-          <span>
-            <BellRing size={16} />
-          </span>
-          <div>
-            <strong>飞书机器人 Webhook</strong>
-            <small>发送完成、失败和等待介入提醒</small>
-          </div>
-        </div>
-        <div className="notification-fields">
-          <label className="field">
-            <span>Webhook 地址</span>
-            <div className="input-shell">
-              <Send size={15} aria-hidden="true" />
-              <Input
-                value={config.webhook.url}
-                onChange={(event) =>
-                  onWebhookChange({ url: event.target.value })
-                }
-                placeholder="https://open.feishu.cn/..."
-                spellCheck={false}
-              />
-            </div>
-          </label>
-        </div>
-        <div className="notification-action">
-          <span className={`inline-result ${webhookResult.tone}`}>
-            {webhookResult.text || ""}
-          </span>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={isBusy || !config.webhook.url.trim()}
-            onClick={onTestWebhook}
-          >
-            {busy === "test-webhook" ? (
-              <LoaderCircle className="spinner" aria-hidden="true" />
-            ) : (
-              <Send aria-hidden="true" />
-            )}
-            测试通知
-          </Button>
-        </div>
-      </Card>
-    </section>
-  );
-}
-
 export const OperationsPanel = memo(OperationsPanelComponent);
 export const AppUpdateCard = memo(AppUpdateCardComponent);
 export const ModelSection = memo(ModelSectionComponent);
 export const ExperimentalFeaturesCard = memo(ExperimentalFeaturesCardComponent);
 export const FeaturePolicyCard = memo(FeaturePolicyCardComponent);
-export const WebhookCard = memo(WebhookCardComponent);

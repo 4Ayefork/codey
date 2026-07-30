@@ -1,0 +1,18 @@
+export type NotificationChannelKind = "feishu" | "telegram";
+
+export type NotificationChannel = {
+  id: string;
+  kind: NotificationChannelKind;
+  enabled: boolean;
+  url: string;
+  botToken: string;
+  botTokenConfigured: boolean;
+  clearBotToken?: boolean;
+  chatId: string;
+};
+
+export type NotificationChannelEditorProps = {
+  channel: NotificationChannel;
+  disabled: boolean;
+  onChange: (patch: Partial<NotificationChannel>) => void;
+};

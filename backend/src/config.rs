@@ -8,6 +8,8 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use crate::notifications::{NotificationChannelKind, WebhookConfig};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProfile {
@@ -41,15 +43,6 @@ impl ProviderProfile {
     pub fn normalized_base_url(&self) -> String {
         self.base_url.trim().trim_end_matches('/').to_string()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub url: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -231,6 +224,7 @@ impl CodeyConfig {
         normalize_model_lists(&mut self.selected_models_by_provider);
         normalize_upstream_model_lists(&mut self.upstream_models_by_provider);
         normalize_model_map(&mut self.default_model_by_provider);
+        self.webhook.normalize();
         self
     }
 
@@ -461,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_webhook_secret_is_ignored_and_not_serialized() {
+    fn legacy_webhook_is_migrated_to_a_feishu_channel_without_the_old_secret() {
         let config = serde_json::from_str::<CodeyConfig>(
             r#"{"activeProfileId":"","profiles":[],"webhook":{"enabled":true,"url":"https://open.feishu.cn/example","secret":"legacy-sign-key"}}"#,
         )
@@ -469,8 +463,16 @@ mod tests {
         .normalize();
         let serialized = serde_json::to_value(&config).unwrap();
 
-        assert!(config.webhook.enabled);
-        assert_eq!(config.webhook.url, "https://open.feishu.cn/example");
+        assert!(!config.webhook.enabled);
+        assert!(config.webhook.url.is_empty());
+        assert_eq!(config.webhook.channels.len(), 1);
+        let channel = &config.webhook.channels[0];
+        assert_eq!(channel.id, "legacy-feishu");
+        assert_eq!(channel.kind, NotificationChannelKind::Feishu);
+        assert!(channel.enabled);
+        assert_eq!(channel.url, "https://open.feishu.cn/example");
+        assert!(serialized["webhook"].get("enabled").is_none());
+        assert!(serialized["webhook"].get("url").is_none());
         assert!(serialized["webhook"].get("secret").is_none());
     }
 

@@ -1498,6 +1498,71 @@ input:focus-visible,
   gap: 14px;
 }
 
+.notification-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notification-add-actions,
+.notification-channel-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.notification-add-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.notification-card.active {
+  border-color: rgba(0, 122, 255, 0.2);
+}
+
+.notification-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notification-channel-controls > span {
+  color: #6e6e73;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.notification-remove-button {
+  color: #8e8e93;
+}
+
+.notification-remove-button:hover {
+  color: var(--mac-red);
+}
+
+.notification-empty {
+  display: flex;
+  min-height: 132px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #8e8e93;
+  text-align: center;
+}
+
+.notification-empty strong {
+  color: #3a3a3c;
+  font-size: 13px;
+}
+
+.notification-empty small {
+  font-size: 11px;
+}
+
 .notification-title {
   display: flex;
   align-items: center;
@@ -1521,6 +1586,11 @@ input:focus-visible,
   flex-shrink: 0;
 }
 
+.notification-title span.telegram {
+  background: rgba(34, 158, 217, 0.12);
+  color: #229ed9;
+}
+
 .notification-title strong {
   display: block;
   font-size: 13px;
@@ -1537,6 +1607,11 @@ input:focus-visible,
   margin-top: 2px;
 }
 
+.notification-fields {
+  display: grid;
+  gap: 10px;
+}
+
 .notification-fields label {
   display: flex;
   flex-direction: column;
@@ -1547,6 +1622,20 @@ input:focus-visible,
   font-size: 11px;
   font-weight: 600;
   color: #6e6e73;
+}
+
+.notification-secret-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -7px;
+}
+
+.notification-secret-action .codey-button {
+  color: #8e8e93;
+}
+
+.notification-secret-action .codey-button:hover {
+  color: var(--mac-red);
 }
 
 .notification-action {
@@ -2468,6 +2557,20 @@ input:focus-visible,
   .section-title.trace-section-title {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .section-title:has(+ .notification-channel-list),
+  .notification-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notification-add-actions {
+    justify-content: flex-start;
+  }
+
+  .notification-channel-controls {
+    justify-content: flex-end;
   }
 
   .trace-module-actions {

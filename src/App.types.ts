@@ -1,4 +1,5 @@
 import type { TraceLogStats } from "./TraceLogModule";
+import type { NotificationChannel } from "./notifications/types";
 
 export type Profile = {
   id: string;
@@ -25,7 +26,7 @@ export type ExperimentalFeaturesConfig = {
 export type Config = {
   activeProfileId: string;
   profiles: Profile[];
-  webhook: { enabled: boolean; url: string };
+  webhook: { channels: NotificationChannel[] };
   codexAppPath: string;
   userScripts: string[];
   selectedModelsByProvider: Record<string, string[]>;

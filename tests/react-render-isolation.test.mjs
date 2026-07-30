@@ -5,11 +5,33 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("settings panels keep stable handlers and skip unrelated parent renders", async () => {
-  const [app, sections, dialogs, trace] = await Promise.all([
+  const [
+    app,
+    sections,
+    dialogs,
+    trace,
+    notificationCard,
+    feishuEditor,
+    telegramEditor,
+    channelRegistry,
+  ] = await Promise.all([
     readFile(new URL("src/App.tsx", root), "utf8"),
     readFile(new URL("src/AppSections.tsx", root), "utf8"),
     readFile(new URL("src/AppDialogs.tsx", root), "utf8"),
     readFile(new URL("src/TraceLogModule.tsx", root), "utf8"),
+    readFile(
+      new URL("src/notifications/NotificationChannelsCard.tsx", root),
+      "utf8",
+    ),
+    readFile(
+      new URL("src/notifications/FeishuChannelEditor.tsx", root),
+      "utf8",
+    ),
+    readFile(
+      new URL("src/notifications/TelegramChannelEditor.tsx", root),
+      "utf8",
+    ),
+    readFile(new URL("src/notifications/channelRegistry.tsx", root), "utf8"),
   ]);
 
   assert.match(app, /function useStableEvent</);
@@ -27,7 +49,6 @@ test("settings panels keep stable handlers and skip unrelated parent renders", a
     "ModelSection",
     "ExperimentalFeaturesCard",
     "FeaturePolicyCard",
-    "WebhookCard",
   ]) {
     assert.match(sections, new RegExp(`export const ${component} = memo\\(`));
   }
@@ -39,4 +60,12 @@ test("settings panels keep stable handlers and skip unrelated parent renders", a
     assert.match(dialogs, new RegExp(`export const ${component} = memo\\(`));
   }
   assert.match(trace, /export const TraceLogModule = memo\(/);
+  assert.match(
+    notificationCard,
+    /export const NotificationChannelsCard = memo\(/,
+  );
+  assert.match(feishuEditor, /export const FeishuChannelEditor = memo\(/);
+  assert.match(telegramEditor, /export const TelegramChannelEditor = memo\(/);
+  assert.match(channelRegistry, /feishu:\s*\{/);
+  assert.match(channelRegistry, /telegram:\s*\{/);
 });

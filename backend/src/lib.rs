@@ -9,6 +9,7 @@ mod launcher;
 mod maintenance_lock;
 mod message_delete;
 mod model_catalog;
+mod notifications;
 mod pending_approval;
 mod pet_slim_patch;
 mod plugin_marketplace;
@@ -24,7 +25,6 @@ mod startup_maintenance;
 mod trace_log_guard;
 mod trace_log_stats;
 mod update_helper;
-mod webhook;
 
 use std::sync::Arc;
 

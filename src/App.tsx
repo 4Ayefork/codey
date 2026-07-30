@@ -33,8 +33,16 @@ import {
   FeaturePolicyCard,
   ModelSection,
   OperationsPanel,
-  WebhookCard,
 } from "./AppSections";
+import {
+  createNotificationChannel,
+  getNotificationChannelDefinition,
+  NotificationChannelsCard,
+} from "./notifications";
+import type {
+  NotificationChannel,
+  NotificationChannelKind,
+} from "./notifications";
 import type {
   AppProps,
   CcSwitchStatus,
@@ -180,10 +188,9 @@ export function App({ embedded = false, onClose }: AppProps) {
   });
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [webhookResult, setWebhookResult] = useState<InlineResult>({
-    tone: "idle",
-    text: "",
-  });
+  const [webhookResults, setWebhookResults] = useState<
+    Record<string, InlineResult>
+  >({});
   const [updateResult, setUpdateResult] = useState<InlineResult>({
     tone: "idle",
     text: "",
@@ -496,10 +503,66 @@ export function App({ embedded = false, onClose }: AppProps) {
     setDirty(true);
   }
 
-  function updateWebhook(patch: Partial<Config["webhook"]>) {
-    if (!config) return;
-    editConfig({ ...config, webhook: { ...config.webhook, ...patch } });
-    setWebhookResult({ tone: "idle", text: "" });
+  function addNotificationChannel(kind: NotificationChannelKind) {
+    const channel = createNotificationChannel(kind);
+    setConfig((current) =>
+      current
+        ? {
+            ...current,
+            webhook: {
+              ...current.webhook,
+              channels: [...current.webhook.channels, channel],
+            },
+          }
+        : current,
+    );
+    setDirty(true);
+  }
+
+  function updateNotificationChannel(
+    channelId: string,
+    patch: Partial<NotificationChannel>,
+  ) {
+    setConfig((current) =>
+      current
+        ? {
+            ...current,
+            webhook: {
+              ...current.webhook,
+              channels: current.webhook.channels.map((channel) =>
+                channel.id === channelId ? { ...channel, ...patch } : channel,
+              ),
+            },
+          }
+        : current,
+    );
+    setDirty(true);
+    setWebhookResults((current) => ({
+      ...current,
+      [channelId]: { tone: "idle", text: "" },
+    }));
+  }
+
+  function removeNotificationChannel(channelId: string) {
+    setConfig((current) =>
+      current
+        ? {
+            ...current,
+            webhook: {
+              ...current.webhook,
+              channels: current.webhook.channels.filter(
+                (channel) => channel.id !== channelId,
+              ),
+            },
+          }
+        : current,
+    );
+    setDirty(true);
+    setWebhookResults((current) => {
+      const next = { ...current };
+      delete next[channelId];
+      return next;
+    });
   }
 
   async function persist(next: Config) {
@@ -788,26 +851,39 @@ export function App({ embedded = false, onClose }: AppProps) {
     });
   }
 
-  async function testWebhook() {
+  async function testWebhook(channelId: string) {
     if (!config || isBusy) return;
-    setBusy("test-webhook");
-    setWebhookResult({ tone: "pending", text: "正在发送测试通知…" });
+    const channel = config.webhook.channels.find(
+      (candidate) => candidate.id === channelId,
+    );
+    if (!channel) return;
+    const definition = getNotificationChannelDefinition(channel.kind);
+    setBusy(`test-webhook-${channelId}`);
+    setWebhookResults((current) => ({
+      ...current,
+      [channelId]: { tone: "pending", text: "正在发送测试通知…" },
+    }));
     try {
-      const next = { ...config, webhook: { ...config.webhook, enabled: true } };
-      await persist(next);
+      await persist(config);
       await withTimeout(
-        invoke("test_webhook"),
+        invoke("test_webhook", { channelId }),
         12_000,
-        "飞书测试在 12 秒内没有完成，请检查 Webhook 地址和网络",
+        `${definition.addLabel}测试在 12 秒内没有完成，请检查渠道配置和网络`,
       );
-      setWebhookResult({
+      setWebhookResults((current) => ({
+        ...current,
+        [channelId]: { tone: "success", text: "测试通知已发送" },
+      }));
+      setNotice({
         tone: "success",
-        text: "测试卡片已发送，三种会话状态通知已开启",
+        text: `${definition.displayName}连接成功`,
       });
-      setNotice({ tone: "success", text: "飞书机器人连接成功" });
     } catch (error) {
       const text = errorText(error);
-      setWebhookResult({ tone: "error", text });
+      setWebhookResults((current) => ({
+        ...current,
+        [channelId]: { tone: "error", text },
+      }));
       setNotice({ tone: "error", text });
     } finally {
       setBusy(null);
@@ -1034,8 +1110,16 @@ export function App({ embedded = false, onClose }: AppProps) {
   const handleSyncOfficialExperimentalFeatures = useStableEvent(
     () => void syncOfficialExperimentalFeatures(),
   );
-  const handleWebhookChange = useStableEvent(updateWebhook);
-  const handleTestWebhook = useStableEvent(() => void testWebhook());
+  const handleAddNotificationChannel = useStableEvent(addNotificationChannel);
+  const handleNotificationChannelChange = useStableEvent(
+    updateNotificationChannel,
+  );
+  const handleRemoveNotificationChannel = useStableEvent(
+    removeNotificationChannel,
+  );
+  const handleTestWebhook = useStableEvent(
+    (channelId: string) => void testWebhook(channelId),
+  );
   const handleSubagentOptimizationChange = useStableEvent(
     (checked: boolean) => void updateSubagentOptimization(checked),
   );
@@ -1183,7 +1267,7 @@ export function App({ embedded = false, onClose }: AppProps) {
             onRestart={handleRestartCodex}
           />
 
-          {/* 中间区域：分左右两栏 (左侧: 应用更新与试验性功能; 右侧: 飞书通知与功能策略) */}
+          {/* 中间区域：分左右两栏 (左侧: 应用更新与试验性功能; 右侧: 消息通知与功能策略) */}
           <div className="upper-dashboard-grid">
             {/* 左侧栏：上方应用更新，下方试验性功能 */}
             <div className="dashboard-column upper-left-column">
@@ -1209,14 +1293,16 @@ export function App({ embedded = false, onClose }: AppProps) {
               />
             </div>
 
-            {/* 右侧栏：上方飞书通知，下方 Codey 功能策略 */}
+            {/* 右侧栏：上方消息通知，下方 Codey 功能策略 */}
             <div className="dashboard-column upper-right-column">
-              <WebhookCard
+              <NotificationChannelsCard
                 config={config}
                 busy={busy}
                 isBusy={isBusy}
-                webhookResult={webhookResult}
-                onWebhookChange={handleWebhookChange}
+                webhookResults={webhookResults}
+                onAddChannel={handleAddNotificationChannel}
+                onChannelChange={handleNotificationChannelChange}
+                onRemoveChannel={handleRemoveNotificationChannel}
                 onTestWebhook={handleTestWebhook}
               />
 
