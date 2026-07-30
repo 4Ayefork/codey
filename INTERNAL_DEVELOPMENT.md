@@ -108,7 +108,7 @@ Codey 将运行时 core/data crate 固定在 `vendor/CodeyRuntime`，生命周�
 
 Codey 不改写 `auth.json`，因此 Codex 的账号栏仍会显示原来的官方登录账号；这只代表客户端登录会话，不代表第三方 provider 仍走官方接口。运行期间全局 provider ID 保持不变，但第三方 API 地址、协议和 bearer token 会直接写入该 provider 的临时配置。
 
-如果 Codey 异常退出，下次启动前会检查 `codex-lease.json`；当 provider 仍保持上次由 Codey 应用的 API 地址时，Codey 会先恢复上次备份，再应用当前线路。若用户在 Codey 运行期间手动改写了 provider 或地址，恢复逻辑会保守地不覆盖该修改。
+如果 Codey 异常退出，下次启动前会检查 `codex-lease.json`；当 provider 仍保持上次由 Codey 应用的 API 地址时，Codey 会先恢复上次备份，再应用当前线路。新租约使用原始、已应用和当前配置做三方合并；缺少已应用快照的旧租约只回滚旧版本明确拥有的 provider、模型目录、推理档位与 FastCtx 字段，并保留插件、市场、用户新增键及同表中的并发扩展，不再整文件覆盖或删除当前配置。若用户在 Codey 运行期间手动改写了 provider 或地址，恢复逻辑会保守地不覆盖该修改。
 
 ## 已知限制
 

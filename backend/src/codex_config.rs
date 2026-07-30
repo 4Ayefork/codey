@@ -104,6 +104,11 @@ Do not use cat, sed, rg, grep, find, or recursive ls when a FastCtx tool covers 
 Use exec only for builds, tests, Git, package managers, or when the FastCtx tool is unavailable \
 or fails. Use `mcp__codey_fastctx__replace` only for deterministic mechanical replacements, \
 and follow every Complete or Partial continuation exactly.";
+const LEGACY_CODEY_FASTCTX_GUIDANCE: &str = "Codey FastCtx context tools are enabled. Prefer \
+`mcp__codey_fastctx__read`, `mcp__codey_fastctx__grep`, and \
+`mcp__codey_fastctx__glob` over shell commands for local file inspection. Use \
+`mcp__codey_fastctx__replace` only for deterministic batch replacements, and \
+follow every Complete or Partial pagination note exactly.";
 const RESERVED_PROVIDER_IDS: [&str; 6] = [
     "amazon-bedrock",
     "openai",
@@ -401,25 +406,21 @@ fn restore_runtime_provider_config_at(home: &Path, marker: &Path) -> Result<bool
         String::new()
     };
     let applied_config = state.backup_dir.join(APPLIED_CONFIG_FILE);
-    if applied_config.exists() {
+    let restored = if applied_config.exists() {
         let applied = fs::read_to_string(&applied_config).with_context(|| {
             format!(
                 "读取 Codey 已应用配置快照失败：{}",
                 applied_config.display()
             )
         })?;
-        let restored = restore_owned_config_changes(&original, &applied, &current)?;
-        if !state.original_config_exists && restored.trim().is_empty() {
-            remove_optional(&config_path)?;
-        } else {
-            atomic_write(&config_path, restored.as_bytes())?;
-        }
-    } else if state.original_config_exists {
-        // Legacy leases predate the applied snapshot and cannot distinguish
-        // Codex-managed changes from Codey's temporary edits.
-        atomic_write(&config_path, original.as_bytes())?;
+        restore_owned_config_changes(&original, &applied, &current)?
     } else {
+        restore_legacy_owned_config_changes(&original, &current, provider_id)?
+    };
+    if !state.original_config_exists && restored.trim().is_empty() {
         remove_optional(&config_path)?;
+    } else {
+        atomic_write(&config_path, restored.as_bytes())?;
     }
     restore_runtime_subagent_files(home, &state)?;
     remove_optional(marker)?;
@@ -515,6 +516,243 @@ fn restore_if_still_applied(path: &Path, original: Option<&[u8]>, applied: &[u8]
         restore_optional_bytes(path, original)?;
     }
     Ok(())
+}
+
+fn restore_legacy_owned_config_changes(
+    original: &str,
+    current: &str,
+    provider_id: &str,
+) -> Result<String> {
+    let original_document = parse_document(original).context("解析旧版 Codex 原配置备份失败")?;
+    let current_document = parse_document(current).context("解析旧版 Codex 当前配置失败")?;
+    let mut applied_document =
+        parse_document(original).context("准备旧版 Codey 配置恢复基线失败")?;
+
+    if current_document
+        .get("model_provider")
+        .and_then(Item::as_str)
+        == Some(provider_id)
+        && let Some(item) = current_document.get("model_provider")
+    {
+        applied_document
+            .as_table_mut()
+            .insert("model_provider", item.clone());
+    }
+
+    if let Some(current_provider) = current_document
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(Item::as_table)
+    {
+        let applied_provider = table_with_selected_fields(
+            current_provider,
+            &[
+                "name",
+                "base_url",
+                "wire_api",
+                "requires_openai_auth",
+                "experimental_bearer_token",
+            ],
+        );
+        ensure_root_table(&mut applied_document, "model_providers")?
+            .insert(provider_id, Item::Table(applied_provider));
+    }
+
+    match current_document.get("model_catalog_json") {
+        Some(item) if item.as_str() == Some(crate::model_catalog::relative_path()) => {
+            applied_document
+                .as_table_mut()
+                .insert("model_catalog_json", item.clone());
+        }
+        None if original_document.get("model_catalog_json").is_some() => {
+            applied_document.as_table_mut().remove("model_catalog_json");
+        }
+        _ => {}
+    }
+
+    if original_document.get("model").is_some() && current_document.get("model").is_none() {
+        applied_document.as_table_mut().remove("model");
+    }
+    remove_legacy_active_profile_model(
+        &original_document,
+        &current_document,
+        &mut applied_document,
+    );
+
+    if let Some(efforts) = current_document
+        .get("desktop")
+        .and_then(Item::as_table)
+        .and_then(|desktop| desktop.get("enabled-reasoning-efforts"))
+        .filter(|item| is_legacy_reasoning_efforts(item))
+    {
+        ensure_root_table(&mut applied_document, "desktop")?
+            .insert("enabled-reasoning-efforts", efforts.clone());
+    }
+
+    if let Some(server) = current_document
+        .get("mcp_servers")
+        .and_then(Item::as_table)
+        .and_then(|servers| servers.get(CODEY_FASTCTX_SERVER_ID))
+        .and_then(Item::as_table)
+        .filter(|server| legacy_fastctx_server_is_codey_owned(server))
+    {
+        let mut applied_server = table_with_selected_fields(
+            server,
+            &["command", "args", "startup_timeout_sec", "tool_timeout_sec"],
+        );
+        if let Some(environment) = server.get("env").and_then(Item::as_table) {
+            let applied_environment =
+                table_with_selected_fields(environment, &["FASTCTX_TOKEN_BUDGET"]);
+            if !applied_environment.is_empty() {
+                applied_server.insert("env", Item::Table(applied_environment));
+            }
+        }
+        ensure_root_table(&mut applied_document, "mcp_servers")?
+            .insert(CODEY_FASTCTX_SERVER_ID, Item::Table(applied_server));
+    }
+
+    let original_namespaces = fastctx_namespaces(&original_document);
+    let current_namespaces = fastctx_namespaces(&current_document);
+    let original_has_fastctx = original_namespaces.is_some_and(|namespaces| {
+        namespaces
+            .iter()
+            .any(|entry| entry.as_str() == Some(CODEY_FASTCTX_NAMESPACE))
+    });
+    let current_has_fastctx = current_namespaces.is_some_and(|namespaces| {
+        namespaces
+            .iter()
+            .any(|entry| entry.as_str() == Some(CODEY_FASTCTX_NAMESPACE))
+    });
+    if !original_has_fastctx && current_has_fastctx {
+        let mut applied_namespaces = original_namespaces.cloned().unwrap_or_else(Array::new);
+        applied_namespaces.push(CODEY_FASTCTX_NAMESPACE);
+        let features = ensure_root_table(&mut applied_document, "features")?;
+        let code_mode = ensure_child_table(features, "code_mode")?;
+        code_mode.insert(
+            "direct_only_tool_namespaces",
+            Item::Value(Value::Array(applied_namespaces)),
+        );
+    }
+
+    if original_document.get("tool_output_token_limit").is_none()
+        && current_document
+            .get("tool_output_token_limit")
+            .and_then(Item::as_integer)
+            == Some(10_000)
+        && let Some(item) = current_document.get("tool_output_token_limit")
+    {
+        applied_document
+            .as_table_mut()
+            .insert("tool_output_token_limit", item.clone());
+    }
+
+    let original_guidance = original_document
+        .get("developer_instructions")
+        .and_then(Item::as_str)
+        .unwrap_or_default();
+    let current_guidance = current_document
+        .get("developer_instructions")
+        .and_then(Item::as_str)
+        .unwrap_or_default();
+    if !original_guidance.contains(LEGACY_CODEY_FASTCTX_GUIDANCE)
+        && current_guidance.contains(LEGACY_CODEY_FASTCTX_GUIDANCE)
+    {
+        let applied_guidance = if original_guidance.trim().is_empty() {
+            LEGACY_CODEY_FASTCTX_GUIDANCE.to_string()
+        } else {
+            format!("{original_guidance}\n\n{LEGACY_CODEY_FASTCTX_GUIDANCE}")
+        };
+        applied_document["developer_instructions"] = value(applied_guidance);
+    }
+
+    let applied = document_string(&applied_document)?;
+    restore_owned_config_changes(original, &applied, current)
+}
+
+fn remove_legacy_active_profile_model(
+    original: &DocumentMut,
+    current: &DocumentMut,
+    applied: &mut DocumentMut,
+) {
+    let Some(active_profile) = original.get("profile").and_then(Item::as_str) else {
+        return;
+    };
+    let original_has_model = original
+        .get("profiles")
+        .and_then(Item::as_table)
+        .and_then(|profiles| profiles.get(active_profile))
+        .and_then(Item::as_table)
+        .is_some_and(|profile| profile.get("model").is_some());
+    let current_profile = current
+        .get("profiles")
+        .and_then(Item::as_table)
+        .and_then(|profiles| profiles.get(active_profile))
+        .and_then(Item::as_table);
+    if !original_has_model || !current_profile.is_some_and(|profile| profile.get("model").is_none())
+    {
+        return;
+    }
+    if let Some(applied_profile) = applied
+        .get_mut("profiles")
+        .and_then(Item::as_table_mut)
+        .and_then(|profiles| profiles.get_mut(active_profile))
+        .and_then(Item::as_table_mut)
+    {
+        applied_profile.remove("model");
+    }
+}
+
+fn table_with_selected_fields(source: &Table, fields: &[&str]) -> Table {
+    let mut selected = Table::new();
+    for field in fields {
+        if let Some(item) = source.get(field) {
+            selected.insert(field, item.clone());
+        }
+    }
+    selected
+}
+
+fn legacy_fastctx_server_is_codey_owned(server: &Table) -> bool {
+    server
+        .get("args")
+        .and_then(Item::as_array)
+        .is_some_and(|arguments| {
+            arguments
+                .iter()
+                .any(|argument| argument.as_str() == Some("--codey-fastctx-mcp"))
+        })
+}
+
+fn fastctx_namespaces(document: &DocumentMut) -> Option<&Array> {
+    document
+        .get("features")
+        .and_then(Item::as_table)
+        .and_then(|features| features.get("code_mode"))
+        .and_then(Item::as_table)
+        .and_then(|code_mode| code_mode.get("direct_only_tool_namespaces"))
+        .and_then(Item::as_array)
+}
+
+fn is_legacy_reasoning_efforts(item: &Item) -> bool {
+    const LEGACY_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+    item.as_array().is_some_and(|efforts| {
+        efforts.len() == LEGACY_EFFORTS.len()
+            && efforts
+                .iter()
+                .zip(LEGACY_EFFORTS)
+                .all(|(actual, expected)| actual.as_str() == Some(expected))
+    })
+}
+
+fn ensure_child_table<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Table> {
+    if parent.get(key).is_none() {
+        parent.insert(key, Item::Table(Table::new()));
+    }
+    parent
+        .get_mut(key)
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| anyhow::anyhow!("{key} 必须是 TOML table"))
 }
 
 fn restore_owned_config_changes(original: &str, applied: &str, current: &str) -> Result<String> {
@@ -636,33 +874,36 @@ fn restore_fastctx_owned_value(
             true
         }
         "developer_instructions" => {
-            let original_has_guidance = original
-                .and_then(Item::as_str)
-                .is_some_and(|text| text.contains(CODEY_FASTCTX_GUIDANCE));
-            let applied_has_guidance = applied
-                .and_then(Item::as_str)
-                .is_some_and(|text| text.contains(CODEY_FASTCTX_GUIDANCE));
-            if original_has_guidance || !applied_has_guidance {
-                return false;
-            }
             let Some(current) = current else {
                 return false;
             };
-            let Some(text) = current.as_str() else {
-                return false;
-            };
-            let separator_and_guidance = format!("\n\n{CODEY_FASTCTX_GUIDANCE}");
-            let restored = if text.contains(&separator_and_guidance) {
-                text.replacen(&separator_and_guidance, "", 1)
-            } else if let Some(remainder) = text.strip_prefix(CODEY_FASTCTX_GUIDANCE) {
-                remainder.trim_start_matches('\n').to_string()
-            } else if text.contains(CODEY_FASTCTX_GUIDANCE) {
-                text.replacen(CODEY_FASTCTX_GUIDANCE, "", 1)
-            } else {
-                return false;
-            };
-            *current = value(restored);
-            true
+            for guidance in [CODEY_FASTCTX_GUIDANCE, LEGACY_CODEY_FASTCTX_GUIDANCE] {
+                let original_has_guidance = original
+                    .and_then(Item::as_str)
+                    .is_some_and(|text| text.contains(guidance));
+                let applied_has_guidance = applied
+                    .and_then(Item::as_str)
+                    .is_some_and(|text| text.contains(guidance));
+                if original_has_guidance || !applied_has_guidance {
+                    continue;
+                }
+                let Some(text) = current.as_str() else {
+                    return false;
+                };
+                let separator_and_guidance = format!("\n\n{guidance}");
+                let restored = if text.contains(&separator_and_guidance) {
+                    text.replacen(&separator_and_guidance, "", 1)
+                } else if let Some(remainder) = text.strip_prefix(guidance) {
+                    remainder.trim_start_matches('\n').to_string()
+                } else if text.contains(guidance) {
+                    text.replacen(guidance, "", 1)
+                } else {
+                    continue;
+                };
+                *current = value(restored);
+                return true;
+            }
+            false
         }
         _ => false,
     }
@@ -1187,6 +1428,33 @@ mod tests {
         Some(Path::new(crate::model_catalog::relative_path()))
     }
 
+    fn write_legacy_runtime_lease(
+        marker: &Path,
+        backup_dir: &Path,
+        original: Option<&str>,
+        provider_id: &str,
+        applied_base_url: &str,
+    ) {
+        fs::create_dir_all(backup_dir).unwrap();
+        if let Some(original) = original {
+            fs::write(backup_dir.join("config.toml"), original).unwrap();
+        }
+        write_lease(
+            marker,
+            &RuntimeConfigLease {
+                backup_dir: backup_dir.to_path_buf(),
+                original_config_exists: original.is_some(),
+                subagent_optimization_applied: false,
+                original_agents_md_exists: false,
+                original_default_agent_exists: false,
+                original_agents_dir_exists: false,
+                provider_id: Some(provider_id.to_string()),
+                applied_base_url: Some(applied_base_url.to_string()),
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn official_patch_uses_the_official_endpoint_and_catalog() {
         let result = patch_config(
@@ -1662,6 +1930,253 @@ custom_setting = "preserved"
         );
         assert!(restore_runtime_provider_config_at(&home, &marker).unwrap());
         assert_eq!(fs::read(home.join("config.toml")).unwrap(), original);
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn legacy_lease_reverts_owned_fields_without_overwriting_concurrent_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex-home");
+        let marker = temp.path().join("codey/codex-lease.json");
+        let backup_dir = temp.path().join("codey/codex-backups/legacy");
+        fs::create_dir_all(&home).unwrap();
+        let original = r#"model_provider = "openai"
+model = "gpt-original"
+model_catalog_json = "user-catalog.json"
+profile = "work"
+developer_instructions = "Original guidance"
+
+[model_providers.codey_global]
+name = "Original provider"
+base_url = "https://chatgpt.com/backend-api/codex"
+wire_api = "responses"
+requires_openai_auth = true
+custom_original = "restore"
+
+[desktop]
+enabled-reasoning-efforts = ["medium"]
+
+[profiles.work]
+model = "profile-original"
+
+[mcp_servers.codey_fastctx]
+command = "/user/server"
+args = ["serve"]
+custom_original = "restore"
+
+[features.code_mode]
+direct_only_tool_namespaces = ["mcp__existing"]
+"#;
+        let current = format!(
+            r#"model_provider = "codey_global"
+model_catalog_json = "model-catalogs/codey-official.json"
+profile = "work"
+developer_instructions = "Original guidance\n\n{LEGACY_CODEY_FASTCTX_GUIDANCE}\n\nConcurrent guidance"
+tool_output_token_limit = 10000
+approval_policy = "never"
+service_tier = "fast"
+
+[model_providers.codey_global]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "chat"
+requires_openai_auth = true
+experimental_bearer_token = "sk-temporary"
+runtime_note = "preserve"
+
+[desktop]
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh"]
+
+[profiles.work]
+approval_policy = "never"
+
+[mcp_servers.codey_fastctx]
+command = "/Applications/Codey.app/Contents/MacOS/codey"
+args = ["--codey-fastctx-mcp"]
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+runtime_note = "preserve"
+
+[mcp_servers.codey_fastctx.env]
+FASTCTX_TOKEN_BUDGET = "8500"
+CONCURRENT = "preserve"
+
+[features.code_mode]
+direct_only_tool_namespaces = ["mcp__existing", "mcp__codey_fastctx", "mcp__concurrent"]
+
+[marketplaces.openai-bundled]
+last_updated = "new"
+"#
+        );
+        fs::write(home.join("config.toml"), current).unwrap();
+        write_legacy_runtime_lease(
+            &marker,
+            &backup_dir,
+            Some(original),
+            GLOBAL_PROVIDER_ID,
+            "https://relay.example/v1",
+        );
+
+        assert!(restore_runtime_provider_config_at(&home, &marker).unwrap());
+        let restored = fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+
+        assert_eq!(restored["model_provider"].as_str(), Some("openai"));
+        assert_eq!(restored["model"].as_str(), Some("gpt-original"));
+        assert_eq!(
+            restored["model_catalog_json"].as_str(),
+            Some("user-catalog.json")
+        );
+        assert_eq!(
+            restored["developer_instructions"].as_str(),
+            Some("Original guidance\n\nConcurrent guidance")
+        );
+        assert!(restored.get("tool_output_token_limit").is_none());
+        assert_eq!(restored["approval_policy"].as_str(), Some("never"));
+        assert_eq!(restored["service_tier"].as_str(), Some("fast"));
+
+        let provider = restored["model_providers"][GLOBAL_PROVIDER_ID]
+            .as_table()
+            .unwrap();
+        assert_eq!(provider["name"].as_str(), Some("Original provider"));
+        assert_eq!(provider["base_url"].as_str(), Some(CHATGPT_CODEX_BASE_URL));
+        assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        assert!(provider.get("experimental_bearer_token").is_none());
+        assert_eq!(provider["custom_original"].as_str(), Some("restore"));
+        assert_eq!(provider["runtime_note"].as_str(), Some("preserve"));
+
+        let efforts = restored["desktop"]["enabled-reasoning-efforts"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            efforts.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+            vec!["medium"]
+        );
+        assert_eq!(
+            restored["profiles"]["work"]["model"].as_str(),
+            Some("profile-original")
+        );
+        assert_eq!(
+            restored["profiles"]["work"]["approval_policy"].as_str(),
+            Some("never")
+        );
+
+        let fastctx = restored["mcp_servers"][CODEY_FASTCTX_SERVER_ID]
+            .as_table()
+            .unwrap();
+        assert_eq!(fastctx["command"].as_str(), Some("/user/server"));
+        assert_eq!(fastctx["args"][0].as_str(), Some("serve"));
+        assert!(fastctx.get("startup_timeout_sec").is_none());
+        assert!(fastctx.get("tool_timeout_sec").is_none());
+        assert_eq!(fastctx["custom_original"].as_str(), Some("restore"));
+        assert_eq!(fastctx["runtime_note"].as_str(), Some("preserve"));
+        assert!(fastctx["env"].get("FASTCTX_TOKEN_BUDGET").is_none());
+        assert_eq!(fastctx["env"]["CONCURRENT"].as_str(), Some("preserve"));
+
+        let namespaces = restored["features"]["code_mode"]["direct_only_tool_namespaces"]
+            .as_array()
+            .unwrap();
+        assert!(
+            namespaces
+                .iter()
+                .all(|entry| entry.as_str() != Some(CODEY_FASTCTX_NAMESPACE))
+        );
+        assert!(
+            namespaces
+                .iter()
+                .any(|entry| entry.as_str() == Some("mcp__existing"))
+        );
+        assert!(
+            namespaces
+                .iter()
+                .any(|entry| entry.as_str() == Some("mcp__concurrent"))
+        );
+        assert_eq!(
+            restored["marketplaces"]["openai-bundled"]["last_updated"].as_str(),
+            Some("new")
+        );
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn legacy_lease_preserves_a_new_user_config_when_no_original_existed() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex-home");
+        let marker = temp.path().join("codey/codex-lease.json");
+        let backup_dir = temp.path().join("codey/codex-backups/legacy");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("config.toml"),
+            r#"model_provider = "codey_global"
+approval_policy = "never"
+
+[model_providers.codey_global]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "sk-temporary"
+
+[plugins.browser]
+enabled = true
+"#,
+        )
+        .unwrap();
+        write_legacy_runtime_lease(
+            &marker,
+            &backup_dir,
+            None,
+            GLOBAL_PROVIDER_ID,
+            "https://relay.example/v1",
+        );
+
+        assert!(restore_runtime_provider_config_at(&home, &marker).unwrap());
+        let restored = fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert!(restored.get("model_provider").is_none());
+        assert!(restored.get("model_providers").is_none());
+        assert_eq!(restored["approval_policy"].as_str(), Some("never"));
+        assert_eq!(
+            restored["plugins"]["browser"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn legacy_lease_removes_a_runtime_only_config_when_no_original_existed() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("codex-home");
+        let marker = temp.path().join("codey/codex-lease.json");
+        let backup_dir = temp.path().join("codey/codex-backups/legacy");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(
+            home.join("config.toml"),
+            r#"model_provider = "codey_global"
+
+[model_providers.codey_global]
+name = "Relay"
+base_url = "https://relay.example/v1"
+wire_api = "responses"
+requires_openai_auth = true
+experimental_bearer_token = "sk-temporary"
+"#,
+        )
+        .unwrap();
+        write_legacy_runtime_lease(
+            &marker,
+            &backup_dir,
+            None,
+            GLOBAL_PROVIDER_ID,
+            "https://relay.example/v1",
+        );
+
+        assert!(restore_runtime_provider_config_at(&home, &marker).unwrap());
+        assert!(!home.join("config.toml").exists());
         assert!(!marker.exists());
     }
 
