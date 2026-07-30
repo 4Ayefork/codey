@@ -73,13 +73,14 @@ test("Windows packaged Codex exit uses an OS process wait instead of polling sna
 });
 
 test("Windows updates survive shutdown through the native helper", async () => {
-  const [main, commands, updateHelper] = await Promise.all([
+  const [main, updates, updateHelper] = await Promise.all([
     readFile(new URL("../backend/src/main.rs", import.meta.url), "utf8").then(
       normalizeLineEndings,
     ),
-    readFile(new URL("../backend/src/commands.rs", import.meta.url), "utf8").then(
-      normalizeLineEndings,
-    ),
+    readFile(
+      new URL("../backend/src/commands/updates.rs", import.meta.url),
+      "utf8",
+    ).then(normalizeLineEndings),
     readFile(
       new URL("../backend/src/update_helper.rs", import.meta.url),
       "utf8",
@@ -91,10 +92,10 @@ test("Windows updates survive shutdown through the native helper", async () => {
     /run_update_helper_if_requested\(\)\?[\s\S]*Builder::new_multi_thread/,
   );
   assert.match(
-    commands,
+    updates,
     /crate::update_helper::spawn_update_installer\(update_path\)/,
   );
-  assert.doesNotMatch(commands, /powershell\.exe|install-codey-update\.ps1/i);
+  assert.doesNotMatch(updates, /powershell\.exe|install-codey-update\.ps1/i);
   assert.match(
     updateHelper,
     /std::fs::copy\(&executable, &helper_path\)[\s\S]*Command::new\(&helper_path\)/,
