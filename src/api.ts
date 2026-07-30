@@ -1,10 +1,55 @@
+export const CODEY_API_COMMANDS = [
+  "load_codey_config",
+  "save_codey_config",
+  "pick_codex_app_directory",
+  "set_codex_app_path",
+  "sync_current_provider",
+  "sync_official_experimental_features",
+  "fetch_current_provider_models",
+  "save_selected_models",
+  "save_default_model",
+  "runtime_status",
+  "refresh_injection_status",
+  "refresh_trace_log_stats",
+  "launch_codey",
+  "restart_codey",
+  "clear_codex_trace_logs",
+  "test_webhook",
+  "check_for_updates",
+  "download_update",
+  "install_downloaded_update",
+  "plugin_marketplace_status",
+  "repair_plugin_marketplace",
+] as const;
+
+export type CodeyApiCommand = (typeof CODEY_API_COMMANDS)[number];
+
+const codeyApiCommandSet = new Set<string>(CODEY_API_COMMANDS);
+
+export function isCodeyApiCommand(command: string): command is CodeyApiCommand {
+  return codeyApiCommandSet.has(command);
+}
+
+export function codeyApiPath(command: string): `/api/${CodeyApiCommand}` {
+  if (!isCodeyApiCommand(command)) {
+    throw new Error(`不允许的 Codey API 命令：${command}`);
+  }
+  return `/api/${command}`;
+}
+
 declare global {
   interface Window {
-    __codeyInvokeApi?: (command: string, args: Record<string, unknown>) => Promise<unknown>;
+    __codeyInvokeApi?: (
+      command: CodeyApiCommand,
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
   }
 }
 
-export async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+export async function invoke<T>(
+  command: CodeyApiCommand,
+  args: Record<string, unknown> = {},
+): Promise<T> {
   if (typeof window.__codeyInvokeApi !== "function") {
     throw new Error("Codey bridge 尚未连接，请退出 Codex 后重新启动 Codey");
   }

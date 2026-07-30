@@ -3,6 +3,7 @@ import "../node_modules/@douyinfe/semi-ui/lib/es/_base/base.css";
 import { App } from "./App";
 import appStyles from "./styles.css?inline";
 import overlayStyles from "./overlay.css?inline";
+import { codeyApiPath } from "./api";
 
 const SETTINGS_OPENED_EVENT = "codey-settings-opened";
 
@@ -28,7 +29,7 @@ window.__codeyInvokeApi = async (command, args) => {
   if (typeof window.__codexSessionDeleteBridge !== "function") {
     throw new Error("Codey bridge 尚未就绪");
   }
-  return window.__codexSessionDeleteBridge(`/api/${command}`, args);
+  return window.__codexSessionDeleteBridge(codeyApiPath(command), args);
 };
 
 if (!window.__codeySettingsOverlay) {
