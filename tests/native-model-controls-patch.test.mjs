@@ -661,10 +661,17 @@ test("restarting Codex stops the current runtime and relaunches it with Codey", 
     commandsSource.indexOf("pub async fn stop_codey_runtime"),
   );
 
-  assert.match(restartFlow, /runtime_operation\.lock\(\)\.await/);
+  assert.match(restartFlow, /runtime_operation\.lock\(\)/);
   assert.match(restartFlow, /stop_codey_runtime_locked\(&restart_state\)/);
   assert.match(restartFlow, /launch_codey_inner_locked\(&restart_state\)/);
   assert.match(restartFlow, /runtime_generation/);
+  assert.match(restartFlow, /restart_task/);
+  assert.match(restartFlow, /oneshot::channel\(\)/);
+  assert.match(restartFlow, /is_shutting_down\(\)/);
+  assert.match(
+    commandsSource,
+    /pub async fn begin_shutdown[\s\S]*?cancel\.send\(\(\)\)[\s\S]*?task\.await/,
+  );
   assert.match(
     commandsSource,
     /runtime_generation\.load\(Ordering::Acquire\) == runtime_generation/,

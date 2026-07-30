@@ -49,6 +49,8 @@ pub struct AppState {
     pub trace_log_stats: TraceLogStatsHandle,
     pub startup_error: RwLock<Option<String>>,
     restart_in_progress: AtomicBool,
+    shutting_down: AtomicBool,
+    restart_task: Mutex<Option<ScheduledRestart>>,
     runtime_generation: AtomicU64,
     session_titles: RwLock<HashMap<String, String>>,
     webhook_notifications: Mutex<HashSet<String>>,
@@ -58,6 +60,23 @@ pub struct AppState {
     waiting_watcher_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     session_scan_wake: Notify,
     shutdown_reason: watch::Sender<Option<AppShutdownReason>>,
+}
+
+struct ScheduledRestart {
+    cancel: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+struct RestartInProgressGuard {
+    state: Arc<AppState>,
+}
+
+impl Drop for RestartInProgressGuard {
+    fn drop(&mut self) {
+        self.state
+            .restart_in_progress
+            .store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +104,8 @@ impl Default for AppState {
             trace_log_stats: TraceLogStatsHandle::idle(),
             startup_error: RwLock::new(None),
             restart_in_progress: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
+            restart_task: Mutex::new(None),
             runtime_generation: AtomicU64::new(0),
             session_titles: RwLock::new(HashMap::new()),
             webhook_notifications: Mutex::new(persisted_waiting_notifications.clone()),
@@ -508,6 +529,7 @@ impl AppState {
     }
 
     fn request_shutdown_with_reason(&self, reason: AppShutdownReason) {
+        self.shutting_down.store(true, Ordering::Release);
         self.shutdown_reason.send_if_modified(|current| {
             if current.is_some() {
                 return false;
@@ -515,6 +537,10 @@ impl AppState {
             *current = Some(reason);
             true
         });
+    }
+
+    fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
     }
 
     pub async fn wait_for_shutdown(&self) -> AppShutdownReason {
@@ -1493,7 +1519,26 @@ async fn refresh_injection_status(state: &Arc<AppState>) -> Result<Value, String
     serde_json::to_value(statuses.as_ref()).map_err(|error| error.to_string())
 }
 
+fn ensure_runtime_can_start(state: &AppState) -> Result<(), String> {
+    if state.is_shutting_down() {
+        Err("Codey 正在退出，无法启动 Codex".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+async fn reclaim_initial_session_scan(
+    state: &Arc<AppState>,
+    initial_scan_task: Option<RecentSessionScanTask>,
+) {
+    if let Some(initial_scan_task) = initial_scan_task {
+        let (initial_event_cache, _) = await_recent_session_scan(initial_scan_task).await;
+        *state.recent_session_event_cache.lock().await = Some(initial_event_cache);
+    }
+}
+
 async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, String> {
+    ensure_runtime_can_start(state)?;
     if state.runtime.lock().await.is_some() {
         return Ok(json!({"status":"already_running"}));
     }
@@ -1514,17 +1559,26 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
     } else {
         None
     };
+    if let Err(error) = ensure_runtime_can_start(state) {
+        reclaim_initial_session_scan(state, initial_scan_task).await;
+        return Err(error);
+    }
     let handler = make_bridge_handler(state);
     let (runtime, codex_exit) = match CodeyRuntime::start(&config, handler).await {
         Ok(started) => started,
         Err(error) => {
-            if let Some(initial_scan_task) = initial_scan_task {
-                let (initial_event_cache, _) = await_recent_session_scan(initial_scan_task).await;
-                *state.recent_session_event_cache.lock().await = Some(initial_event_cache);
-            }
+            reclaim_initial_session_scan(state, initial_scan_task).await;
             return Err(error.to_string());
         }
     };
+    if state.is_shutting_down() {
+        let stop_error = runtime.stop().await.err();
+        reclaim_initial_session_scan(state, initial_scan_task).await;
+        return Err(stop_error.map_or_else(
+            || "Codey 已进入退出流程，已取消本次 Codex 启动".to_string(),
+            |error| format!("Codey 已进入退出流程，停止刚启动的 Codex 失败：{error}"),
+        ));
+    }
     *state.runtime.lock().await = Some(Arc::new(runtime));
     let runtime_generation = state.runtime_generation.fetch_add(1, Ordering::AcqRel) + 1;
     if let Some(initial_scan_task) = initial_scan_task {
@@ -1545,7 +1599,9 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
 }
 
 async fn launch_codey_inner(state: &Arc<AppState>) -> Result<Value, String> {
+    ensure_runtime_can_start(state)?;
     let _operation = state.runtime_operation.lock().await;
+    ensure_runtime_can_start(state)?;
     launch_codey_inner_locked(state).await
 }
 
@@ -1566,49 +1622,73 @@ pub async fn launch_codey_runtime(state: &Arc<AppState>) -> Result<Value, String
 }
 
 pub async fn schedule_restart_codey_runtime(state: &Arc<AppState>) -> Result<Value, String> {
+    let mut restart_task = state.restart_task.lock().await;
+    ensure_runtime_can_start(state)?;
     if state.restart_in_progress.swap(true, Ordering::AcqRel) {
         return Ok(json!({"status":"already_restarting"}));
     }
 
+    let (cancel, cancel_rx) = oneshot::channel();
     let restart_state = Arc::clone(state);
-    tokio::spawn(async move {
-        // The request originates inside the Codex renderer. Let the bridge
-        // deliver its response before stopping the renderer that owns it.
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let _operation = restart_state.runtime_operation.lock().await;
-        restart_state
-            .runtime_generation
-            .fetch_add(1, Ordering::AcqRel);
-        if let Err(error) = stop_codey_runtime_locked(&restart_state).await {
-            error_log::record_failure(
-                "runtime_restart_failed",
-                "stop_runtime_for_restart",
-                error.clone(),
-                json!({}),
-            );
-            *restart_state.startup_error.write().await = Some(error);
-            restart_state
-                .restart_in_progress
-                .store(false, Ordering::Release);
-            return;
-        }
-        let launch = launch_codey_inner_locked(&restart_state).await;
-        *restart_state.startup_error.write().await = launch.as_ref().err().cloned();
-        if let Err(error) = launch {
-            error_log::record_failure(
-                "runtime_restart_failed",
-                "launch_runtime_after_restart",
-                error.clone(),
-                json!({}),
-            );
-            eprintln!("Codey 自动重启 Codex 失败：{error}");
-        }
-        restart_state
-            .restart_in_progress
-            .store(false, Ordering::Release);
+    let task = tokio::spawn(async move {
+        let _restart_guard = RestartInProgressGuard {
+            state: Arc::clone(&restart_state),
+        };
+        run_scheduled_restart(restart_state, cancel_rx).await;
     });
+    *restart_task = Some(ScheduledRestart { cancel, task });
 
     Ok(json!({"status":"restarting"}))
+}
+
+async fn run_scheduled_restart(restart_state: Arc<AppState>, mut cancel: oneshot::Receiver<()>) {
+    tokio::select! {
+        // The request originates inside the Codex renderer. Let the bridge
+        // deliver its response before stopping the renderer that owns it.
+        _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+        _ = &mut cancel => return,
+    }
+    if restart_state.is_shutting_down() {
+        return;
+    }
+
+    let _operation = tokio::select! {
+        operation = restart_state.runtime_operation.lock() => operation,
+        _ = &mut cancel => return,
+    };
+    if restart_state.is_shutting_down() {
+        return;
+    }
+
+    if let Err(error) = stop_codey_runtime_locked(&restart_state).await {
+        error_log::record_failure(
+            "runtime_restart_failed",
+            "stop_runtime_for_restart",
+            error.clone(),
+            json!({}),
+        );
+        *restart_state.startup_error.write().await = Some(error);
+        return;
+    }
+    restart_state
+        .runtime_generation
+        .fetch_add(1, Ordering::AcqRel);
+    if restart_state.is_shutting_down() {
+        return;
+    }
+
+    let launch = launch_codey_inner_locked(&restart_state).await;
+    *restart_state.startup_error.write().await = launch.as_ref().err().cloned();
+    if let Err(error) = launch {
+        error_log::record_failure(
+            "runtime_restart_failed",
+            "launch_runtime_after_restart",
+            error.clone(),
+            json!({}),
+        );
+        eprintln!("Codey 自动重启 Codex 失败：{error}");
+        restart_state.request_shutdown();
+    }
 }
 
 async fn stop_codey_runtime_locked(state: &Arc<AppState>) -> Result<Value, String> {
@@ -1627,8 +1707,26 @@ async fn stop_codey_runtime_locked(state: &Arc<AppState>) -> Result<Value, Strin
 }
 
 pub async fn stop_codey_runtime(state: &Arc<AppState>) -> Result<Value, String> {
+    begin_shutdown(state).await;
     let _operation = state.runtime_operation.lock().await;
     stop_codey_runtime_locked(state).await
+}
+
+pub async fn begin_shutdown(state: &Arc<AppState>) {
+    state.shutting_down.store(true, Ordering::Release);
+    let restart = state.restart_task.lock().await.take();
+    if let Some(ScheduledRestart { cancel, task }) = restart {
+        let _ = cancel.send(());
+        if let Err(error) = task.await {
+            error_log::record_failure(
+                "runtime_restart_failed",
+                "cancel_runtime_restart_during_shutdown",
+                error.to_string(),
+                json!({}),
+            );
+        }
+    }
+    state.restart_in_progress.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -1718,6 +1816,42 @@ mod restart_tests {
             &applied,
             &experimental_feature_change
         ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_a_restart_waiting_for_the_runtime_lock() {
+        let state = Arc::new(AppState::default());
+        let _operation = state.runtime_operation.lock().await;
+        let response = schedule_restart_codey_runtime(&state).await.unwrap();
+        assert_eq!(response["status"], "restarting");
+        tokio::time::sleep(Duration::from_millis(275)).await;
+
+        tokio::time::timeout(Duration::from_secs(1), begin_shutdown(&state))
+            .await
+            .expect("shutdown waited on a restart blocked by the runtime lock");
+
+        assert!(state.is_shutting_down());
+        assert!(!state.restart_in_progress.load(Ordering::Acquire));
+        assert!(state.restart_task.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_new_runtime_launches_and_restarts() {
+        let state = Arc::new(AppState::default());
+        begin_shutdown(&state).await;
+
+        assert!(
+            launch_codey_inner(&state)
+                .await
+                .unwrap_err()
+                .contains("正在退出")
+        );
+        assert!(
+            schedule_restart_codey_runtime(&state)
+                .await
+                .unwrap_err()
+                .contains("正在退出")
+        );
     }
 
     #[test]
