@@ -1,4 +1,3 @@
-import React from "react";
 import ReactDOM from "react-dom/client";
 import "../node_modules/@douyinfe/semi-ui/lib/es/_base/base.css";
 import { App } from "./App";

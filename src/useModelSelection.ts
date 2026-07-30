@@ -208,7 +208,6 @@ export function useModelSelection({
     setModelPickerVisible,
     modelQuery,
     setModelQuery,
-    draftModels,
     setDraftModels,
     officialSlugs,
     draftModelSet,

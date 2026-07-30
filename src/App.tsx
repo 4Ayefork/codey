@@ -173,7 +173,6 @@ export function App({ embedded = false, onClose }: AppProps) {
     setModelPickerVisible,
     modelQuery,
     setModelQuery,
-    draftModels,
     setDraftModels,
     officialSlugs,
     draftModelSet,

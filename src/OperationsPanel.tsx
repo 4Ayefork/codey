@@ -101,22 +101,6 @@ function OperationsPanelComponent({
         : "将在 Codex 启动时自动安装并校验 Windows 优化补丁。";
   const resolvedCodexPath = status.codexAppPath || "/Applications/ChatGPT.app";
   const restartPending = Boolean(status.restartRequired);
-  const pluginIssues = [
-    pluginMarketplaceStatus?.officialMarketplace === false
-      ? "官方市场快照缺失"
-      : "",
-    pluginMarketplaceStatus?.officialMarketplace &&
-    pluginMarketplaceStatus.officialRegistered === false
-      ? "官方市场尚未注册"
-      : "",
-    pluginMarketplaceStatus?.remoteMarketplace === false
-      ? "远程市场快照缺失"
-      : "",
-    pluginMarketplaceStatus?.remoteMarketplace &&
-    pluginMarketplaceStatus.remoteRegistered === false
-      ? "远程市场尚未注册"
-      : "",
-  ].filter(Boolean);
 
   type MetricItem = {
     id: string;
