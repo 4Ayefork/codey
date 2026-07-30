@@ -1782,217 +1782,202 @@ fn truncate_error_preview(input: &str) -> String {
 }
 
 fn append_responses_input(input: &Value, messages: &mut Vec<Value>) {
+    if let Value::String(text) = input {
+        messages.push(json!({ "role": "user", "content": text }));
+        return;
+    }
+
+    let mut history = ResponsesHistoryState::new(messages);
     match input {
-        Value::String(text) => messages.push(json!({ "role": "user", "content": text })),
         Value::Array(items) => {
-            let mut pending_tool_calls = Vec::new();
-            let mut pending_reasoning = Vec::new();
-            let mut seen_tool_call_ids = BTreeSet::new();
             for item in items {
-                append_responses_item(
-                    item,
-                    messages,
-                    &mut pending_tool_calls,
-                    &mut pending_reasoning,
-                    &mut seen_tool_call_ids,
-                );
+                history.append(item);
             }
-            flush_tool_calls(messages, &mut pending_tool_calls, &mut pending_reasoning);
-            flush_reasoning(messages, &mut pending_reasoning);
         }
-        Value::Object(_) => {
-            let mut pending_tool_calls = Vec::new();
-            let mut pending_reasoning = Vec::new();
-            let mut seen_tool_call_ids = BTreeSet::new();
-            append_responses_item(
-                input,
-                messages,
-                &mut pending_tool_calls,
-                &mut pending_reasoning,
-                &mut seen_tool_call_ids,
-            );
-            flush_tool_calls(messages, &mut pending_tool_calls, &mut pending_reasoning);
-            flush_reasoning(messages, &mut pending_reasoning);
-        }
+        Value::Object(_) => history.append(input),
         _ => {}
+    }
+    history.finish();
+}
+
+struct ResponsesHistoryState<'a> {
+    messages: &'a mut Vec<Value>,
+    pending_tool_calls: Vec<Value>,
+    pending_reasoning: Vec<String>,
+    seen_tool_call_ids: BTreeSet<String>,
+}
+
+impl<'a> ResponsesHistoryState<'a> {
+    fn new(messages: &'a mut Vec<Value>) -> Self {
+        Self {
+            messages,
+            pending_tool_calls: Vec::new(),
+            pending_reasoning: Vec::new(),
+            seen_tool_call_ids: BTreeSet::new(),
+        }
+    }
+
+    fn append(&mut self, item: &Value) {
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => self.append_function_call(item),
+            Some("function_call_output" | "custom_tool_call_output") => {
+                self.append_tool_output(item)
+            }
+            Some("custom_tool_call") => self.append_custom_tool_call(item),
+            Some("tool_call") => self.append_legacy_tool_call(item),
+            Some("tool_result") => self.append_legacy_tool_result(item),
+            Some("reasoning") => self.append_reasoning(item),
+            _ => self.append_message(item),
+        }
+    }
+
+    fn finish(&mut self) {
+        self.flush_tool_calls();
+        self.flush_reasoning();
+    }
+
+    fn append_function_call(&mut self, item: &Value) {
+        let name = responses_history_function_name(item);
+        let call_id = responses_history_call_id(item);
+        if name.is_empty() || call_id.is_empty() {
+            return;
+        }
+        let arguments = responses_arguments_to_chat(item.get("arguments").unwrap_or(&Value::Null));
+        self.push_tool_call(call_id, &name, arguments);
+    }
+
+    fn append_custom_tool_call(&mut self, item: &Value) {
+        let call_id = responses_history_call_id(item);
+        if call_id.is_empty() {
+            return;
+        }
+        let input = item
+            .get("input")
+            .or_else(|| item.get("arguments"))
+            .unwrap_or(&Value::Null);
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+        let (name, arguments) = build_custom_tool_call_history(name, input);
+        self.push_tool_call(call_id, &name, arguments);
+    }
+
+    fn append_legacy_tool_call(&mut self, item: &Value) {
+        let Some(tool_use) = item.get("tool_use") else {
+            return;
+        };
+        let call_id = tool_use
+            .get("id")
+            .or_else(|| item.get("call_id"))
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if call_id.is_empty() {
+            return;
+        }
+        let name = tool_use.get("name").and_then(Value::as_str).unwrap_or("");
+        let arguments = responses_arguments_to_chat(tool_use.get("input").unwrap_or(&Value::Null));
+        self.push_tool_call(call_id, name, arguments);
+    }
+
+    fn push_tool_call(&mut self, call_id: &str, name: &str, arguments: String) {
+        self.seen_tool_call_ids.insert(call_id.to_string());
+        self.pending_tool_calls.push(json!({
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments
+            }
+        }));
+    }
+
+    fn append_tool_output(&mut self, item: &Value) {
+        let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
+        if call_id.is_empty() {
+            return;
+        }
+        self.push_tool_output(call_id, item.get("output").unwrap_or(&Value::Null));
+    }
+
+    fn append_legacy_tool_result(&mut self, item: &Value) {
+        self.flush_tool_calls();
+        let content = item.get("content").unwrap_or(&Value::Null);
+        let call_id = content
+            .get("tool_use_id")
+            .or_else(|| item.get("tool_call_id"))
+            .or_else(|| item.get("call_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if call_id.is_empty() {
+            return;
+        }
+        self.push_tool_output(call_id, content.get("content").unwrap_or(content));
+    }
+
+    fn push_tool_output(&mut self, call_id: &str, output: &Value) {
+        if !self.seen_tool_call_ids.contains(call_id) {
+            self.flush_tool_calls();
+            self.flush_reasoning();
+            self.messages
+                .push(orphan_tool_output_message(call_id, output));
+            return;
+        }
+        self.flush_tool_calls();
+        self.messages.push(json!({
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": response_output_text(output)
+        }));
+    }
+
+    fn append_reasoning(&mut self, item: &Value) {
+        if let Some(text) = responses_reasoning_text(item).filter(|text| !text.is_empty()) {
+            self.pending_reasoning.push(text);
+        }
+    }
+
+    fn append_message(&mut self, item: &Value) {
+        self.flush_tool_calls();
+        if item.get("role").is_none() && item.get("content").is_none() {
+            return;
+        }
+        let role = responses_role_to_chat_role(item.get("role").and_then(Value::as_str));
+        let mut message = json!({
+            "role": role,
+            "content": responses_content_to_chat_content(
+                role,
+                item.get("content").unwrap_or(&Value::Null)
+            )
+        });
+        if role == "assistant" {
+            if !self.pending_reasoning.is_empty() && self.pending_tool_calls.is_empty() {
+                message["reasoning_content"] =
+                    json!(std::mem::take(&mut self.pending_reasoning).join("\n"));
+            }
+        } else if !self.pending_reasoning.is_empty() {
+            self.flush_tool_calls();
+            self.flush_reasoning();
+        }
+        self.messages.push(message);
+    }
+
+    fn flush_tool_calls(&mut self) {
+        flush_tool_calls(
+            self.messages,
+            &mut self.pending_tool_calls,
+            &mut self.pending_reasoning,
+        );
+    }
+
+    fn flush_reasoning(&mut self) {
+        flush_reasoning(self.messages, &mut self.pending_reasoning);
     }
 }
 
-fn append_responses_item(
-    item: &Value,
-    messages: &mut Vec<Value>,
-    pending_tool_calls: &mut Vec<Value>,
-    pending_reasoning: &mut Vec<String>,
-    seen_tool_call_ids: &mut BTreeSet<String>,
-) {
-    match item.get("type").and_then(Value::as_str) {
-        Some("function_call") => {
-            let name = responses_history_function_name(item);
-            if name.is_empty() {
-                return;
-            }
-            let call_id = item
-                .get("call_id")
-                .or_else(|| item.get("id"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if call_id.is_empty() {
-                return;
-            }
-            seen_tool_call_ids.insert(call_id.to_string());
-            pending_tool_calls.push(json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": responses_arguments_to_chat(item.get("arguments").unwrap_or(&json!({})))
-                }
-            }));
-        }
-        Some("function_call_output") => {
-            let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-            if call_id.is_empty() {
-                return;
-            }
-            if !seen_tool_call_ids.contains(call_id) {
-                flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-                flush_reasoning(messages, pending_reasoning);
-                messages.push(orphan_tool_output_message(
-                    call_id,
-                    item.get("output").unwrap_or(&Value::Null),
-                ));
-                return;
-            }
-            flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": response_output_text(item.get("output").unwrap_or(&Value::Null))
-            }));
-        }
-        Some("custom_tool_call") => {
-            let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-            let input = item
-                .get("input")
-                .or_else(|| item.get("arguments"))
-                .unwrap_or(&Value::Null);
-            let (name, arguments) = build_custom_tool_call_history(name, input);
-            let call_id = item
-                .get("call_id")
-                .or_else(|| item.get("id"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if call_id.is_empty() {
-                return;
-            }
-            seen_tool_call_ids.insert(call_id.to_string());
-            pending_tool_calls.push(json!({
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": arguments
-                }
-            }));
-        }
-        Some("custom_tool_call_output") => {
-            let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-            if call_id.is_empty() {
-                return;
-            }
-            if !seen_tool_call_ids.contains(call_id) {
-                flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-                flush_reasoning(messages, pending_reasoning);
-                messages.push(orphan_tool_output_message(
-                    call_id,
-                    item.get("output").unwrap_or(&Value::Null),
-                ));
-                return;
-            }
-            flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": response_output_text(item.get("output").unwrap_or(&Value::Null))
-            }));
-        }
-        Some("tool_call") => {
-            if let Some(tool_use) = item.get("tool_use") {
-                let call_id = tool_use
-                    .get("id")
-                    .or_else(|| item.get("call_id"))
-                    .or_else(|| item.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if call_id.is_empty() {
-                    return;
-                }
-                seen_tool_call_ids.insert(call_id.to_string());
-                pending_tool_calls.push(json!({
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_use.get("name").and_then(Value::as_str).unwrap_or(""),
-                        "arguments": responses_arguments_to_chat(tool_use.get("input").unwrap_or(&json!({})))
-                    }
-                }));
-            }
-        }
-        Some("tool_result") => {
-            flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-            let content = item.get("content").unwrap_or(&Value::Null);
-            let call_id = content
-                .get("tool_use_id")
-                .or_else(|| item.get("tool_call_id"))
-                .or_else(|| item.get("call_id"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if call_id.is_empty() {
-                return;
-            }
-            let output = content.get("content").unwrap_or(content);
-            if !seen_tool_call_ids.contains(call_id) {
-                flush_reasoning(messages, pending_reasoning);
-                messages.push(orphan_tool_output_message(call_id, output));
-                return;
-            }
-            messages.push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": response_output_text(output)
-            }));
-        }
-        Some("reasoning") => {
-            if let Some(text) = responses_reasoning_text(item) {
-                if !text.is_empty() {
-                    pending_reasoning.push(text);
-                }
-            }
-        }
-        _ => {
-            flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-            if item.get("role").is_some() || item.get("content").is_some() {
-                let role = responses_role_to_chat_role(item.get("role").and_then(Value::as_str));
-                let mut message = json!({
-                    "role": role,
-                    "content": responses_content_to_chat_content(
-                        role,
-                        item.get("content").unwrap_or(&Value::Null)
-                        )
-                });
-                if role == "assistant" {
-                    if !pending_reasoning.is_empty() && pending_tool_calls.is_empty() {
-                        message["reasoning_content"] =
-                            json!(std::mem::take(pending_reasoning).join("\n"));
-                    }
-                } else if !pending_reasoning.is_empty() {
-                    flush_tool_calls(messages, pending_tool_calls, pending_reasoning);
-                    flush_reasoning(messages, pending_reasoning);
-                }
-                messages.push(message);
-            }
-        }
-    }
+fn responses_history_call_id(item: &Value) -> &str {
+    item.get("call_id")
+        .or_else(|| item.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 fn orphan_tool_output_message(call_id: &str, output: &Value) -> Value {
