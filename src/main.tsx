@@ -14,6 +14,11 @@ if (import.meta.env.DEV) {
       new URLSearchParams(window.location.search).get("platform") === "windows"
         ? "windows"
         : "macos";
+    const previewEndpoints = {
+      primary: "https://primary.example.invalid/v1",
+      backup: "https://backup.example.invalid/v1",
+      feishu: "https://webhook.example.invalid/feishu/preview-only",
+    } as const;
     let previewConfig = {
       settingsRevision: 0,
       activeProfileId: "primary",
@@ -21,8 +26,8 @@ if (import.meta.env.DEV) {
         {
           id: "primary",
           name: "主力代理 (ChatGPT)",
-          baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-proj-....................",
+          baseUrl: previewEndpoints.primary,
+          apiKey: "preview-only-not-a-secret",
           protocol: "responses" as const,
           ccSwitchProviderId: "primary",
           ccSwitchReadOnly: false,
@@ -30,7 +35,7 @@ if (import.meta.env.DEV) {
         {
           id: "backup",
           name: "备用中转 (Claude)",
-          baseUrl: "https://api.anthropic.com/v1",
+          baseUrl: previewEndpoints.backup,
           apiKey: "",
           protocol: "chatCompletions" as const,
           ccSwitchProviderId: "backup",
@@ -43,7 +48,7 @@ if (import.meta.env.DEV) {
             id: "preview-feishu",
             kind: "feishu" as const,
             enabled: true,
-            url: "https://open.feishu.cn/open-apis/bot/v2/hook/a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+            url: previewEndpoints.feishu,
             botToken: "",
             botTokenConfigured: false,
             clearBotToken: false,
@@ -57,7 +62,7 @@ if (import.meta.env.DEV) {
             botToken: "",
             botTokenConfigured: true,
             clearBotToken: false,
-            chatId: "-1001234567890",
+            chatId: "preview-chat-id",
           },
         ],
       },
@@ -96,7 +101,7 @@ if (import.meta.env.DEV) {
         id: "primary",
         name: "主力代理 (ChatGPT)",
         official: false,
-        baseUrl: "https://api.openai.com/v1",
+        baseUrl: previewEndpoints.primary,
         protocol: "responses" as const,
         source: "cc-switch" as const,
       },
