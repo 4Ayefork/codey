@@ -384,6 +384,7 @@ fn catalog_models_from_value(value: &Value) -> Vec<Value> {
                 return None;
             }
             let mut model = model.clone();
+            codey_runtime_core::model_suffix::remove_model_prompt_fields(&mut model);
             model["slug"] = json!(slug);
             Some(model)
         })
@@ -508,8 +509,9 @@ fn synthetic_model(template: &Value, model_id: &str, index: usize) -> Value {
 }
 
 fn write_catalog(home: &Path, models: &[Value]) -> Result<()> {
-    let mut catalog = serde_json::to_vec_pretty(&json!({ "models": models }))
-        .context("序列化 Codey 模型目录失败")?;
+    let mut value = json!({ "models": models });
+    codey_runtime_core::model_suffix::remove_model_prompt_fields(&mut value);
+    let mut catalog = serde_json::to_vec_pretty(&value).context("序列化 Codey 模型目录失败")?;
     catalog.push(b'\n');
     let path = home.join(relative_path());
     if fs::read(&path).is_ok_and(|current| current == catalog) {
@@ -651,6 +653,29 @@ mod tests {
         .unwrap();
     }
 
+    fn write_cache_with_prompt_fields(home: &Path) {
+        let mut cache = official_cache();
+        let model = &mut cache["models"][0];
+        model["base_instructions"] = json!("DO NOT COPY THIS BASE PROMPT");
+        model["model_messages"] = json!({
+            "instructions_template": "DO NOT COPY THIS TEMPLATE",
+            "instructions_variables": {
+                "developer": "DO NOT COPY THIS VARIABLE"
+            }
+        });
+        model["compatibility"] = json!({
+            "instructions_template": "DO NOT COPY THIS NESTED TEMPLATE",
+            "instructions_variables": {
+                "nested": "DO NOT COPY THIS NESTED VARIABLE"
+            }
+        });
+        fs::write(
+            home.join("models_cache.json"),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+    }
+
     fn assert_native_fast(model: &Value) {
         assert!(
             model["service_tiers"]
@@ -737,6 +762,35 @@ mod tests {
                 "gpt-5.4",
             ]
         );
+    }
+
+    #[test]
+    fn generated_catalog_never_copies_prompt_fields_from_the_native_cache() {
+        let home = tempfile::tempdir().unwrap();
+        write_cache_with_prompt_fields(home.path());
+
+        refresh_for_provider(home.path(), true, None, &[]).unwrap();
+
+        let catalog: Value = serde_json::from_slice(
+            &fs::read(home.path().join(MODEL_CATALOG_RELATIVE_PATH)).unwrap(),
+        )
+        .unwrap();
+        let serialized = serde_json::to_string(&catalog).unwrap();
+        for forbidden in [
+            "base_instructions",
+            "instructions_template",
+            "model_messages",
+            "instructions_variables",
+            "personality_default",
+            "personality_friendly",
+            "personality_pragmatic",
+            "DO NOT COPY",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "generated catalog leaked {forbidden}"
+            );
+        }
     }
 
     #[test]

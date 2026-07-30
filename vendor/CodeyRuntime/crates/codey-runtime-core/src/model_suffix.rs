@@ -132,12 +132,24 @@ pub fn collect_catalog_entries(
     entries
 }
 
-/// 内置 codex bundled catalog 模板（assets/codex-models.json），用于 clone entry
-/// 保证字段齐全，避免 codex 因缺字段忽略条目。
+/// 内置 Codex 模型兼容元数据，不包含 system/developer prompt。
+///
+/// 这里只保留 Codex 识别模型条目所需的能力字段，避免把上游私有提示资产
+/// 编入 CodeyRuntime 二进制。
 const BUNDLED_TEMPLATE_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../assets/codex-models.json"
+    "/../../assets/model-catalog-metadata.json"
 ));
+
+const MODEL_PROMPT_FIELDS: [&str; 7] = [
+    "base_instructions",
+    "instructions_template",
+    "model_messages",
+    "instructions_variables",
+    "personality_default",
+    "personality_friendly",
+    "personality_pragmatic",
+];
 
 /// 构建 codex model_catalog_json 内容。
 ///
@@ -160,10 +172,11 @@ pub fn build_model_catalog_json_with_template(
     fallback_window: Option<u64>,
     template: Option<&Value>,
 ) -> String {
-    let template = template
+    let mut template = template
         .cloned()
         .or_else(|| load_bundled_template_entry())
         .unwrap_or_else(|| json!({}));
+    remove_model_prompt_fields(&mut template);
 
     let models: Vec<Value> = entries
         .iter()
@@ -192,16 +205,42 @@ pub fn build_model_catalog_json_with_template(
     serde_json::to_string_pretty(&json!({ "models": models })).unwrap_or_default()
 }
 
-/// Loads the complete model catalog bundled with CodeyRuntime.
+/// Loads prompt-free model compatibility metadata bundled with CodeyRuntime.
 ///
 /// Callers should prefer a live Codex cache and use this only as a cold-start
 /// fallback when an API-only installation has not created models_cache.json.
 pub fn bundled_model_catalog() -> Option<Value> {
-    serde_json::from_str(BUNDLED_TEMPLATE_JSON).ok()
+    let mut catalog = serde_json::from_str(BUNDLED_TEMPLATE_JSON).ok()?;
+    remove_model_prompt_fields(&mut catalog);
+    Some(catalog)
 }
 
 /// 加载内置 bundled catalog 模板的第一条 model entry。
 fn load_bundled_template_entry() -> Option<Value> {
     let catalog = bundled_model_catalog()?;
     catalog.get("models")?.as_array()?.first().cloned()
+}
+
+/// Recursively removes Codex prompt-bearing fields from model catalog values.
+///
+/// Live `models_cache.json` entries can contain the same fields as the bundled
+/// upstream catalog. Callers must sanitize cloned entries before writing a
+/// Codey-owned catalog.
+pub fn remove_model_prompt_fields(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for field in MODEL_PROMPT_FIELDS {
+                object.remove(field);
+            }
+            for child in object.values_mut() {
+                remove_model_prompt_fields(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                remove_model_prompt_fields(child);
+            }
+        }
+        _ => {}
+    }
 }

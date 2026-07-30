@@ -81,6 +81,8 @@ pnpm run release -- 0.2.1 --include-existing-changes
 
 Codey 将运行时 core/data crate 固定在 `vendor/CodeyRuntime`，生命周期和会话扫描优化也已直接合并其中。本地与 CI 构建不需要额外的运行时源码目录或补丁。
 
+运行时只内置不含提示词的 Codex 模型兼容元数据。上游模型缓存中的基础指令、消息模板、模板变量和人格提示字段会在克隆模板及写入 `model-catalogs/codey-official.json` 前递归删除，完整 system/developer prompt 不进入仓库资产、CodeyRuntime 二进制或 Codey 生成目录。
+
 ## 配置与路径
 
 - Codey 配置：由 `directories` 根据系统保存到 Codey 配置目录下的 `config.json`。

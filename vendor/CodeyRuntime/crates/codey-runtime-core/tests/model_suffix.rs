@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use codey_runtime_core::model_suffix::{
-    build_model_catalog_json, collect_catalog_entries, parse_model_suffix,
+    build_model_catalog_json, build_model_catalog_json_with_template, bundled_model_catalog,
+    collect_catalog_entries, parse_model_suffix,
 };
+use serde_json::{Value, json};
 
 #[test]
 fn parse_suffix_extracts_k_and_m_units() {
@@ -100,6 +102,43 @@ fn build_catalog_json_uses_fallback_for_no_suffix_entries() {
 }
 
 #[test]
+fn bundled_catalog_contains_compatibility_metadata_without_prompt_assets() {
+    let catalog = bundled_model_catalog().expect("bundled model metadata");
+    assert_prompt_fields_absent(&catalog);
+    assert!(
+        catalog["models"]
+            .as_array()
+            .is_some_and(|models| !models.is_empty())
+    );
+}
+
+#[test]
+fn build_catalog_strips_prompt_fields_from_an_external_template() {
+    let entries = collect_catalog_entries("third-party-model", &HashMap::new(), "");
+    let template = json!({
+        "slug": "template",
+        "base_instructions": "private base prompt",
+        "model_messages": {
+            "instructions_template": "private instructions template",
+            "personality_default": "private personality"
+        },
+        "compatibility": {
+            "instructions_template": "private nested template",
+            "personality_default": "private nested personality",
+            "instructions_variables": {
+                "private": "nested prompt variable"
+            }
+        }
+    });
+
+    let catalog = build_model_catalog_json_with_template(&entries, None, Some(&template));
+    let catalog: Value = serde_json::from_str(&catalog).unwrap();
+    assert_prompt_fields_absent(&catalog);
+    let serialized = serde_json::to_string(&catalog).unwrap();
+    assert!(!serialized.contains("private"));
+}
+
+#[test]
 fn collect_entries_adopts_suffix_for_current_model_from_list() {
     // 当前 model 本身无后缀，但 model_list 中靠后位置有同名带后缀条目。
     let mut windows = HashMap::new();
@@ -156,4 +195,31 @@ fn migrate_model_list_with_suffixes_splits_slug_and_window() {
     );
     assert_eq!(windows.get("deepseek-v4-pro"), None);
     assert_eq!(windows.get("nvidia/...:free"), Some(&"200000".to_string()));
+}
+
+fn assert_prompt_fields_absent(value: &Value) {
+    match value {
+        Value::Object(object) => {
+            for field in [
+                "base_instructions",
+                "instructions_template",
+                "model_messages",
+                "instructions_variables",
+                "personality_default",
+                "personality_friendly",
+                "personality_pragmatic",
+            ] {
+                assert!(!object.contains_key(field), "found prompt field {field}");
+            }
+            for child in object.values() {
+                assert_prompt_fields_absent(child);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                assert_prompt_fields_absent(child);
+            }
+        }
+        _ => {}
+    }
 }
