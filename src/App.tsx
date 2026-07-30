@@ -34,16 +34,10 @@ import {
   ModelSection,
   OperationsPanel,
 } from "./AppSections";
-import {
-  createNotificationChannel,
-  getNotificationChannelDefinition,
-  NotificationChannelsCard,
-} from "./notifications";
+import { NotificationChannelsCard } from "./notifications";
+import { errorText, withTimeout } from "./appUtils";
+import { useNotifications } from "./useNotifications";
 import { useRuntimeStatus } from "./useRuntimeStatus";
-import type {
-  NotificationChannel,
-  NotificationChannelKind,
-} from "./notifications";
 import type {
   AppProps,
   CcSwitchStatus,
@@ -94,8 +88,6 @@ function CodeyBrandMark() {
 }
 
 const SUBAGENT_MODEL = "gpt-5.6-luna";
-const errorText = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
 const supportsModel = (models: string[], expected: string) =>
   models.some((model) => model.trim().toLowerCase() === expected);
 const updateAvailable = (
@@ -123,29 +115,6 @@ function publishUpdateAvailability(result: UpdateCheck | null) {
       detail: window.__codeyUpdateAvailability,
     }),
   );
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(
-      () => reject(new Error(message)),
-      timeoutMs,
-    );
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 function useStableEvent<Args extends unknown[], Result>(
@@ -187,9 +156,6 @@ export function App({ embedded = false, onClose }: AppProps) {
   });
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [webhookResults, setWebhookResults] = useState<
-    Record<string, InlineResult>
-  >({});
   const [updateResult, setUpdateResult] = useState<InlineResult>({
     tone: "idle",
     text: "",
@@ -225,6 +191,21 @@ export function App({ embedded = false, onClose }: AppProps) {
   }, [modelQuery, modelState.upstreamModels]);
   const isBusy = busy !== null;
   const configLoaded = config !== null;
+  const {
+    webhookResults,
+    addNotificationChannel,
+    updateNotificationChannel,
+    removeNotificationChannel,
+    testWebhook,
+  } = useNotifications({
+    config,
+    isBusy,
+    setConfig,
+    setDirty,
+    setBusy,
+    setNotice,
+    persist,
+  });
 
   useEffect(() => {
     updateCheckRef.current = updateCheck;
@@ -386,68 +367,6 @@ export function App({ embedded = false, onClose }: AppProps) {
       current ? { ...current, subagentOptimization: enabled } : current,
     );
     setDirty(true);
-  }
-
-  function addNotificationChannel(kind: NotificationChannelKind) {
-    const channel = createNotificationChannel(kind);
-    setConfig((current) =>
-      current
-        ? {
-            ...current,
-            webhook: {
-              ...current.webhook,
-              channels: [...current.webhook.channels, channel],
-            },
-          }
-        : current,
-    );
-    setDirty(true);
-  }
-
-  function updateNotificationChannel(
-    channelId: string,
-    patch: Partial<NotificationChannel>,
-  ) {
-    setConfig((current) =>
-      current
-        ? {
-            ...current,
-            webhook: {
-              ...current.webhook,
-              channels: current.webhook.channels.map((channel) =>
-                channel.id === channelId ? { ...channel, ...patch } : channel,
-              ),
-            },
-          }
-        : current,
-    );
-    setDirty(true);
-    setWebhookResults((current) => ({
-      ...current,
-      [channelId]: { tone: "idle", text: "" },
-    }));
-  }
-
-  function removeNotificationChannel(channelId: string) {
-    setConfig((current) =>
-      current
-        ? {
-            ...current,
-            webhook: {
-              ...current.webhook,
-              channels: current.webhook.channels.filter(
-                (channel) => channel.id !== channelId,
-              ),
-            },
-          }
-        : current,
-    );
-    setDirty(true);
-    setWebhookResults((current) => {
-      const next = { ...current };
-      delete next[channelId];
-      return next;
-    });
   }
 
   async function persist(next: Config) {
@@ -734,45 +653,6 @@ export function App({ embedded = false, onClose }: AppProps) {
           : `已将 ${result.modelState.defaultModel} 设为默认模型`,
       });
     });
-  }
-
-  async function testWebhook(channelId: string) {
-    if (!config || isBusy) return;
-    const channel = config.webhook.channels.find(
-      (candidate) => candidate.id === channelId,
-    );
-    if (!channel) return;
-    const definition = getNotificationChannelDefinition(channel.kind);
-    setBusy(`test-webhook-${channelId}`);
-    setWebhookResults((current) => ({
-      ...current,
-      [channelId]: { tone: "pending", text: "正在发送测试通知…" },
-    }));
-    try {
-      await persist(config);
-      await withTimeout(
-        invoke("test_webhook", { channelId }),
-        12_000,
-        `${definition.addLabel}测试在 12 秒内没有完成，请检查渠道配置和网络`,
-      );
-      setWebhookResults((current) => ({
-        ...current,
-        [channelId]: { tone: "success", text: "测试通知已发送" },
-      }));
-      setNotice({
-        tone: "success",
-        text: `${definition.displayName}连接成功`,
-      });
-    } catch (error) {
-      const text = errorText(error);
-      setWebhookResults((current) => ({
-        ...current,
-        [channelId]: { tone: "error", text },
-      }));
-      setNotice({ tone: "error", text });
-    } finally {
-      setBusy(null);
-    }
   }
 
   async function checkForUpdates() {
