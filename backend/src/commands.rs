@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, Notify, RwLock, oneshot};
+use tokio::sync::{Mutex, Notify, RwLock, oneshot, watch};
 
 use crate::cc_switch;
 use crate::cdp;
@@ -57,8 +57,7 @@ pub struct AppState {
     waiting_watcher_shutdown: Mutex<Option<oneshot::Sender<()>>>,
     waiting_watcher_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     session_scan_wake: Notify,
-    shutdown_reason: AtomicU8,
-    shutdown_notify: Notify,
+    shutdown_reason: watch::Sender<Option<AppShutdownReason>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,32 +66,12 @@ pub enum AppShutdownReason {
     InstallUpdate,
 }
 
-impl AppShutdownReason {
-    const NONE: u8 = 0;
-    const CODEX_EXITED: u8 = 1;
-    const INSTALL_UPDATE: u8 = 2;
-
-    fn as_u8(self) -> u8 {
-        match self {
-            Self::CodexExited => Self::CODEX_EXITED,
-            Self::InstallUpdate => Self::INSTALL_UPDATE,
-        }
-    }
-
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            Self::CODEX_EXITED => Some(Self::CodexExited),
-            Self::INSTALL_UPDATE => Some(Self::InstallUpdate),
-            _ => None,
-        }
-    }
-}
-
 impl Default for AppState {
     fn default() -> Self {
         let store = ConfigStore::default();
         let config = store.load().unwrap_or_default();
         let persisted_waiting_notifications = initial_waiting_notifications(&store, &[]);
+        let (shutdown_reason, _) = watch::channel(None);
         Self {
             store,
             config: RwLock::new(config),
@@ -116,8 +95,7 @@ impl Default for AppState {
             waiting_watcher_shutdown: Mutex::new(None),
             waiting_watcher_task: Mutex::new(None),
             session_scan_wake: Notify::new(),
-            shutdown_reason: AtomicU8::new(AppShutdownReason::NONE),
-            shutdown_notify: Notify::new(),
+            shutdown_reason,
         }
     }
 }
@@ -530,29 +508,25 @@ impl AppState {
     }
 
     fn request_shutdown_with_reason(&self, reason: AppShutdownReason) {
-        if self
-            .shutdown_reason
-            .compare_exchange(
-                AppShutdownReason::NONE,
-                reason.as_u8(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-        {
-            self.shutdown_notify.notify_waiters();
-        }
+        self.shutdown_reason.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(reason);
+            true
+        });
     }
 
     pub async fn wait_for_shutdown(&self) -> AppShutdownReason {
-        if let Some(reason) =
-            AppShutdownReason::from_u8(self.shutdown_reason.load(Ordering::Acquire))
-        {
-            return reason;
+        let mut shutdown_reason = self.shutdown_reason.subscribe();
+        loop {
+            if let Some(reason) = *shutdown_reason.borrow_and_update() {
+                return reason;
+            }
+            if shutdown_reason.changed().await.is_err() {
+                return AppShutdownReason::CodexExited;
+            }
         }
-        self.shutdown_notify.notified().await;
-        AppShutdownReason::from_u8(self.shutdown_reason.load(Ordering::Acquire))
-            .unwrap_or(AppShutdownReason::CodexExited)
     }
 
     pub async fn bridge_request(self: &Arc<Self>, path: String, payload: Value) -> Value {
@@ -3185,11 +3159,36 @@ mod tests {
         let state = AppState::default();
 
         state.request_update_shutdown();
+        state.request_shutdown();
 
         assert_eq!(
             state.wait_for_shutdown().await,
             AppShutdownReason::InstallUpdate
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_wakes_every_waiter_without_losing_the_reason() {
+        let state = Arc::new(AppState::default());
+        let waiters = (0..8)
+            .map(|_| {
+                let state = state.clone();
+                tokio::spawn(async move { state.wait_for_shutdown().await })
+            })
+            .collect::<Vec<_>>();
+        tokio::task::yield_now().await;
+
+        state.request_update_shutdown();
+
+        for waiter in waiters {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), waiter)
+                    .await
+                    .expect("shutdown waiter timed out")
+                    .expect("shutdown waiter panicked"),
+                AppShutdownReason::InstallUpdate
+            );
+        }
     }
 
     #[test]
