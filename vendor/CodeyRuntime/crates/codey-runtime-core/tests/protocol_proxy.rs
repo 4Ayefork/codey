@@ -626,6 +626,40 @@ fn responses_input_flattens_namespace_function_history_and_skips_invalid_tool_it
 }
 
 #[test]
+fn responses_input_deduplicates_replayed_tool_call_ids() {
+    let converted = responses_to_chat_completions(json!({
+        "model": "gpt-5-mini",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_duplicate",
+                "name": "lookup",
+                "arguments": "{\"query\":\"first\"}"
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_duplicate",
+                "name": "lookup",
+                "arguments": "{\"query\":\"replayed\"}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_duplicate",
+                "output": "found"
+            }
+        ]
+    }))
+    .unwrap();
+
+    let calls = converted["messages"][0]["tool_calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["id"], "call_duplicate");
+    assert_eq!(calls[0]["function"]["arguments"], "{\"query\":\"first\"}");
+    assert_eq!(converted["messages"][1]["tool_call_id"], "call_duplicate");
+    assert_eq!(converted["messages"][1]["content"], "found");
+}
+
+#[test]
 fn responses_input_sanitizes_invalid_function_call_arguments_history() {
     let converted = responses_to_chat_completions(json!({
         "model": "gpt-5-mini",

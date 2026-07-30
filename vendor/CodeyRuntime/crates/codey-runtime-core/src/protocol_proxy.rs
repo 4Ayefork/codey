@@ -1879,7 +1879,9 @@ impl<'a> ResponsesHistoryState<'a> {
     }
 
     fn push_tool_call(&mut self, call_id: &str, name: &str, arguments: String) {
-        self.seen_tool_call_ids.insert(call_id.to_string());
+        if !self.seen_tool_call_ids.insert(call_id.to_string()) {
+            return;
+        }
         self.pending_tool_calls.push(json!({
             "id": call_id,
             "type": "function",
