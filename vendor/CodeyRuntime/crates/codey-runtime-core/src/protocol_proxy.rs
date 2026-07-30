@@ -2220,106 +2220,120 @@ fn build_codex_tool_context(tools: Option<&Value>) -> CodexToolContext {
 
     for tool in tools {
         if let Some(name) = tool.as_str().filter(|name| !name.is_empty()) {
-            if let Some(action) = proxy_action_from_upstream_name(name) {
-                context.custom_tools.insert(
-                    name.to_string(),
-                    CodexCustomToolSpec {
-                        openai_name: "apply_patch".to_string(),
-                        kind: CodexCustomToolKind::ApplyPatch,
-                        proxy_action: Some(action),
-                    },
-                );
-                context.has_custom_tools = true;
-                continue;
-            }
-            context.custom_tools.insert(
-                name.to_string(),
-                CodexCustomToolSpec {
-                    openai_name: name.to_string(),
-                    kind: CodexCustomToolKind::Raw,
-                    proxy_action: None,
-                },
-            );
-            context.has_custom_tools = true;
+            add_string_tool_to_context(&mut context, name);
             continue;
         }
         let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("");
         match tool_type {
-            "custom" => {
-                let Some(name) = tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                else {
-                    continue;
-                };
-                let kind = detect_codex_custom_tool_kind(tool, name);
-                context.custom_tools.insert(
-                    name.to_string(),
-                    CodexCustomToolSpec {
-                        openai_name: name.to_string(),
-                        kind,
-                        proxy_action: None,
-                    },
-                );
-                if kind == CodexCustomToolKind::ApplyPatch {
-                    for action in [
-                        CodexPatchProxyAction::AddFile,
-                        CodexPatchProxyAction::DeleteFile,
-                        CodexPatchProxyAction::UpdateFile,
-                        CodexPatchProxyAction::ReplaceFile,
-                        CodexPatchProxyAction::Batch,
-                    ] {
-                        let proxy_name = format!("{name}_{}", action.suffix());
-                        context.custom_tools.insert(
-                            proxy_name,
-                            CodexCustomToolSpec {
-                                openai_name: name.to_string(),
-                                kind: CodexCustomToolKind::ApplyPatch,
-                                proxy_action: Some(action),
-                            },
-                        );
-                    }
-                }
-                context.has_custom_tools = true;
-            }
-            "function" => {
-                if let Some(name) = tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                {
-                    context.function_tools.insert(
-                        name.to_string(),
-                        CodexFunctionToolSpec {
-                            name: name.to_string(),
-                            namespace: String::new(),
-                        },
-                    );
-                }
-            }
+            "custom" => add_custom_tool_to_context(&mut context, tool),
+            "function" => add_function_tool_to_context(&mut context, tool),
             "namespace" => add_namespace_tools_to_context(&mut context, tool),
             "web_search" | "local_shell" | "computer_use" => {
-                let name = tool
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or(tool_type);
-                context.custom_tools.insert(
-                    name.to_string(),
-                    CodexCustomToolSpec {
-                        openai_name: name.to_string(),
-                        kind: CodexCustomToolKind::BuiltIn,
-                        proxy_action: None,
-                    },
-                );
-                context.has_custom_tools = true;
+                add_builtin_tool_to_context(&mut context, tool, tool_type)
             }
             _ => {}
         }
     }
 
     context
+}
+
+fn add_string_tool_to_context(context: &mut CodexToolContext, name: &str) {
+    let (openai_name, kind, proxy_action) =
+        if let Some(action) = proxy_action_from_upstream_name(name) {
+            (
+                "apply_patch".to_string(),
+                CodexCustomToolKind::ApplyPatch,
+                Some(action),
+            )
+        } else {
+            (name.to_string(), CodexCustomToolKind::Raw, None)
+        };
+    context.custom_tools.insert(
+        name.to_string(),
+        CodexCustomToolSpec {
+            openai_name,
+            kind,
+            proxy_action,
+        },
+    );
+    context.has_custom_tools = true;
+}
+
+fn add_custom_tool_to_context(context: &mut CodexToolContext, tool: &Value) {
+    let Some(name) = tool
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+    else {
+        return;
+    };
+    let kind = detect_codex_custom_tool_kind(tool, name);
+    context.custom_tools.insert(
+        name.to_string(),
+        CodexCustomToolSpec {
+            openai_name: name.to_string(),
+            kind,
+            proxy_action: None,
+        },
+    );
+    if kind == CodexCustomToolKind::ApplyPatch {
+        add_apply_patch_proxy_tools_to_context(context, name);
+    }
+    context.has_custom_tools = true;
+}
+
+fn add_apply_patch_proxy_tools_to_context(context: &mut CodexToolContext, name: &str) {
+    for action in [
+        CodexPatchProxyAction::AddFile,
+        CodexPatchProxyAction::DeleteFile,
+        CodexPatchProxyAction::UpdateFile,
+        CodexPatchProxyAction::ReplaceFile,
+        CodexPatchProxyAction::Batch,
+    ] {
+        context.custom_tools.insert(
+            format!("{name}_{}", action.suffix()),
+            CodexCustomToolSpec {
+                openai_name: name.to_string(),
+                kind: CodexCustomToolKind::ApplyPatch,
+                proxy_action: Some(action),
+            },
+        );
+    }
+}
+
+fn add_function_tool_to_context(context: &mut CodexToolContext, tool: &Value) {
+    let Some(name) = tool
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+    else {
+        return;
+    };
+    context.function_tools.insert(
+        name.to_string(),
+        CodexFunctionToolSpec {
+            name: name.to_string(),
+            namespace: String::new(),
+        },
+    );
+}
+
+fn add_builtin_tool_to_context(context: &mut CodexToolContext, tool: &Value, tool_type: &str) {
+    let name = tool
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(tool_type);
+    context.custom_tools.insert(
+        name.to_string(),
+        CodexCustomToolSpec {
+            openai_name: name.to_string(),
+            kind: CodexCustomToolKind::BuiltIn,
+            proxy_action: None,
+        },
+    );
+    context.has_custom_tools = true;
 }
 
 fn add_namespace_tools_to_context(context: &mut CodexToolContext, namespace_tool: &Value) {
