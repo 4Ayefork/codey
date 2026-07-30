@@ -518,16 +518,20 @@ impl RecentSessionEventCache {
             events
                 .turn_configurations
                 .insert(session_id.clone(), parsed.turn_configurations.clone());
-            events.pending_approvals.extend(
-                parsed.pending_approvals.iter().cloned().into_iter().map(
-                    |(turn_id, waiting_id)| PendingApproval {
-                        session_id: session_id.clone(),
-                        turn_id,
-                        waiting_id,
-                        duration_ms,
-                    },
-                ),
-            );
+            events
+                .pending_approvals
+                .extend(
+                    parsed
+                        .pending_approvals
+                        .iter()
+                        .cloned()
+                        .map(|(turn_id, waiting_id)| PendingApproval {
+                            session_id: session_id.clone(),
+                            turn_id,
+                            waiting_id,
+                            duration_ms,
+                        }),
+                );
             events
                 .started_turns
                 .extend(

@@ -238,7 +238,7 @@ fn provider_connection(record: &ProviderRecord) -> Result<ProviderConnection> {
         || auth_mode == Some("chatgpt")
         || provider_key.is_empty()
         || base_url.is_empty();
-    if !official && !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+    if !(official || base_url.starts_with("http://") || base_url.starts_with("https://")) {
         bail!("cc-switch 当前第三方线路缺少有效的 API 地址");
     }
     Ok(ProviderConnection {

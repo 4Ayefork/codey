@@ -542,27 +542,26 @@ impl CodeyRuntime {
                         eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
                     }
                     #[cfg(target_os = "macos")]
-                    if let Some(inspector_argument) = spawned.inspector_argument.as_deref() {
-                        if let Err(stop_error) = stop_macos_codex(
+                    if let Some(inspector_argument) = spawned.inspector_argument.as_deref()
+                        && let Err(stop_error) = stop_macos_codex(
                             inspector_argument,
                             &app_dir,
                             spawned.process_id,
                             spawned.process_group_id,
                         )
                         .await
-                        {
-                            error_log::record_failure(
-                                "cleanup_failed",
-                                "cleanup_macos_after_injection_failure",
-                                format!("{stop_error:#}"),
-                                serde_json::json!({
-                                    "appPath": app_dir,
-                                    "processId": spawned.process_id,
-                                    "processGroupId": spawned.process_group_id,
-                                }),
-                            );
-                            eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
-                        }
+                    {
+                        error_log::record_failure(
+                            "cleanup_failed",
+                            "cleanup_macos_after_injection_failure",
+                            format!("{stop_error:#}"),
+                            serde_json::json!({
+                                "appPath": app_dir,
+                                "processId": spawned.process_id,
+                                "processGroupId": spawned.process_group_id,
+                            }),
+                        );
+                        eprintln!("Codex 注入失败后的进程清理失败：{stop_error:#}");
                     }
                     #[cfg(all(unix, not(target_os = "macos")))]
                     if let Err(stop_error) = terminate_unix_codex_processes(
@@ -722,16 +721,16 @@ impl CodeyRuntime {
             let _ = sender.send(());
         }
         let watchdog_task = self.watchdog_task.lock().await.take();
-        if let Some(task) = watchdog_task {
-            if let Err(error) = task.await {
-                error_log::record_failure(
-                    "injection_watchdog_failed",
-                    "stop_cdp_watchdog",
-                    error.to_string(),
-                    serde_json::json!({}),
-                );
-                eprintln!("Codey CDP watchdog 关闭失败：{error}");
-            }
+        if let Some(task) = watchdog_task
+            && let Err(error) = task.await
+        {
+            error_log::record_failure(
+                "injection_watchdog_failed",
+                "stop_cdp_watchdog",
+                error.to_string(),
+                serde_json::json!({}),
+            );
+            eprintln!("Codey CDP watchdog 关闭失败：{error}");
         }
         if let Some(sender) = self.exit_watchdog_shutdown.lock().await.take() {
             let _ = sender.send(());
@@ -837,7 +836,7 @@ fn session_maintenance_summary(
         detail.push_str("；检测到跨 Provider 加密历史警告");
     }
     if !errors.is_empty() {
-        detail.push_str("；");
+        detail.push('；');
         detail.push_str(&errors.join("；"));
     }
     let status = if errors.is_empty() { "ready" } else { "error" };
@@ -1121,7 +1120,7 @@ async fn spawn_codex(
             Ok(()) => {
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
-                return Ok(spawned);
+                Ok(spawned)
             }
             Err(error) => {
                 error_log::record_failure(
@@ -1138,8 +1137,7 @@ async fn spawn_codex(
                     }),
                 );
                 stop_windows_spawned_codex(&mut spawned).await;
-                return Err(error)
-                    .context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI");
+                Err(error).context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI")
             }
         }
     }
@@ -1173,7 +1171,7 @@ async fn spawn_codex(
             Ok(()) => {
                 spawned.performance_status = "ready".to_string();
                 spawned.performance_detail = startup_patch_detail();
-                return Ok(spawned);
+                Ok(spawned)
             }
             Err(error) => {
                 error_log::record_failure(
@@ -1213,8 +1211,7 @@ async fn spawn_codex(
                 if let Some(child) = spawned.child.take() {
                     reap_child_after_cleanup(child, "reap_child_after_startup_patch_failure").await;
                 }
-                return Err(error)
-                    .context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI");
+                Err(error).context("Codex 启动硬补丁未能安装；已停止 Codex，未降级为仅隐藏 UI")
             }
         }
     }

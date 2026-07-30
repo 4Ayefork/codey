@@ -126,9 +126,8 @@ fn experimental_feature_mismatches(
     configured_features
         .codex_feature_overrides()
         .into_iter()
-        .filter_map(|(flag, expected)| {
-            (effective_overrides.get(flag).copied() != Some(expected)).then(|| flag.to_string())
-        })
+        .filter(|(flag, expected)| effective_overrides.get(flag).copied() != Some(*expected))
+        .map(|(flag, _)| flag.to_string())
         .collect()
 }
 

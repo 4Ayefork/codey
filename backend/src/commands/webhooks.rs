@@ -677,6 +677,7 @@ async fn dispatch_webhook_channels(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_settled_webhook_failure(
     state: &Arc<AppState>,
     payload: &Value,
@@ -1159,11 +1160,12 @@ mod tests {
     #[tokio::test]
     async fn startup_baseline_only_suppresses_waits_seen_before_runtime_start() {
         let directory = tempfile::tempdir().unwrap();
-        let mut state = AppState::default();
-        state.store = ConfigStore::new(directory.path().join("config.json"));
-        state.webhook_notifications = Mutex::new(HashSet::new());
-        state.persisted_waiting_notifications = Mutex::new(HashSet::new());
-        let state = Arc::new(state);
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            webhook_notifications: Mutex::new(HashSet::new()),
+            persisted_waiting_notifications: Mutex::new(HashSet::new()),
+            ..AppState::default()
+        });
         let before_start = PendingApproval {
             session_id: "session-old".to_string(),
             turn_id: "turn-old".to_string(),

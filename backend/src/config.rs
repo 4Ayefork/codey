@@ -414,8 +414,10 @@ mod tests {
 
     #[test]
     fn normalizes_missing_active_profile() {
-        let mut config = CodeyConfig::default();
-        config.active_profile_id = "missing".to_string();
+        let config = CodeyConfig {
+            active_profile_id: "missing".to_string(),
+            ..CodeyConfig::default()
+        };
         let normalized = config.normalize();
         assert_eq!(normalized.active_profile_id, normalized.profiles[0].id);
     }
@@ -442,9 +444,9 @@ mod tests {
         .normalize();
         let serialized = serde_json::to_value(&config).unwrap();
 
-        assert_eq!(config.disable_trace_log_writes, false);
-        assert_eq!(config.slim_codex_pet, false);
-        assert_eq!(config.slim_codex_voice, false);
+        assert!(!config.disable_trace_log_writes);
+        assert!(!config.slim_codex_pet);
+        assert!(!config.slim_codex_voice);
         assert_eq!(
             serialized.get("disableTraceLogWrites"),
             Some(&serde_json::json!(false))
@@ -656,9 +658,6 @@ mod tests {
             round_trip.experimental_features,
             config.experimental_features
         );
-        assert_eq!(
-            config.experimental_features.codex_feature_overrides()["unified_exec"],
-            true
-        );
+        assert!(config.experimental_features.codex_feature_overrides()["unified_exec"]);
     }
 }

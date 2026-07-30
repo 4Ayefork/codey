@@ -179,6 +179,7 @@ pub fn apply_runtime_provider_config(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_runtime_provider_config_at(
     home: &Path,
     profile: &ProviderProfile,
@@ -689,8 +690,7 @@ fn remove_legacy_active_profile_model(
         .and_then(Item::as_table)
         .and_then(|profiles| profiles.get(active_profile))
         .and_then(Item::as_table);
-    if !original_has_model || !current_profile.is_some_and(|profile| profile.get("model").is_none())
-    {
+    if !original_has_model || current_profile.is_none_or(|profile| profile.get("model").is_some()) {
         return;
     }
     if let Some(applied_profile) = applied
@@ -804,7 +804,7 @@ fn restore_table_changes(original: &Table, applied: &Table, current: &mut Table)
                 .zip(current.get(&key).and_then(Item::as_table))
                 .is_some_and(|(applied, current)| {
                     ["command", "args"].iter().all(|field| {
-                        optional_items_semantically_equal(applied.get(*field), current.get(*field))
+                        optional_items_semantically_equal(applied.get(field), current.get(field))
                     })
                 });
             if still_codey_owned {

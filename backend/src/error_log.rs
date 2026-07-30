@@ -109,7 +109,7 @@ fn repair_incomplete_tail(path: &Path) -> std::io::Result<()> {
         .iter()
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index.saturating_add(1));
-    let mut file = OpenOptions::new().append(true).write(true).open(path)?;
+    let mut file = OpenOptions::new().append(true).open(path)?;
     if serde_json::from_slice::<Value>(&bytes[line_start..]).is_ok() {
         file.write_all(b"\n")?;
     } else {
@@ -121,7 +121,7 @@ fn repair_incomplete_tail(path: &Path) -> std::io::Result<()> {
 pub fn initialize() {
     let path = error_log_path();
     let today = Local::now().date_naive();
-    let writer = ERROR_LOG_WRITER.get_or_init(|| Mutex::new(ErrorLogWriter::default()));
+    let writer = ERROR_LOG_WRITER.get_or_init(|| Mutex::new(ErrorLogWriter));
     let result = writer
         .lock()
         .map_err(|_| std::io::Error::other("Codey error log lock is poisoned"))
@@ -159,9 +159,9 @@ pub fn record_failure(
 }
 
 pub fn run_helper_if_requested() -> anyhow::Result<bool> {
-    if !std::env::args_os()
+    if std::env::args_os()
         .nth(1)
-        .is_some_and(|argument| argument == ERROR_LOG_HELPER_ARGUMENT)
+        .is_none_or(|argument| argument != ERROR_LOG_HELPER_ARGUMENT)
     {
         return Ok(false);
     }
@@ -253,7 +253,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(ERROR_LOG_FILE);
         let today = Local::now().date_naive();
-        let mut writer = ErrorLogWriter::default();
+        let mut writer = ErrorLogWriter;
 
         writer.append(&path, today, r#"{"error":"first"}"#).unwrap();
         writer
@@ -272,7 +272,7 @@ mod tests {
         let path = temp.path().join(ERROR_LOG_FILE);
         let first_day = Local::now().date_naive();
         let next_day = first_day.succ_opt().unwrap();
-        let mut writer = ErrorLogWriter::default();
+        let mut writer = ErrorLogWriter;
 
         writer
             .append(&path, first_day, r#"{"error":"old"}"#)

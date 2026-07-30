@@ -238,10 +238,10 @@ pub fn is_available(home: &Path) -> bool {
 /// launch and across repeated config-page lookups. The paths are part of the
 /// key so entries can never leak between Codex homes.
 type CatalogSignature = Vec<(PathBuf, u64, Option<std::time::SystemTime>)>;
+type OfficialEntriesCache = std::sync::Mutex<Option<(CatalogSignature, Vec<Value>)>>;
 
-static OFFICIAL_ENTRIES_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<Option<(CatalogSignature, Vec<Value>)>>,
-> = std::sync::OnceLock::new();
+static OFFICIAL_ENTRIES_CACHE: std::sync::OnceLock<OfficialEntriesCache> =
+    std::sync::OnceLock::new();
 
 fn catalog_signature(paths: &[PathBuf]) -> CatalogSignature {
     paths

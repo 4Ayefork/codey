@@ -496,9 +496,11 @@ mod tests {
     #[test]
     fn shared_handle_serializes_the_latest_snapshot_without_changing_the_wire_shape() {
         let handle = TraceLogStatsHandle::idle();
-        let mut updated = TraceLogStatsSnapshot::default();
-        updated.databases_found = 3;
-        updated.row_count = 42;
+        let updated = TraceLogStatsSnapshot {
+            databases_found: 3,
+            row_count: 42,
+            ..TraceLogStatsSnapshot::default()
+        };
         handle.replace(updated);
 
         let value = serde_json::to_value(&handle).unwrap();
