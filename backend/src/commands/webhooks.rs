@@ -378,15 +378,41 @@ fn save_waiting_notification_ledger(
     Ok(())
 }
 
-async fn persist_waiting_notification(
+async fn reserve_waiting_notification(
+    state: &Arc<AppState>,
+    notification_key: &str,
+) -> Result<bool, String> {
+    let mut persisted = state.persisted_waiting_notifications.lock().await;
+    if persisted.contains(notification_key) {
+        return Ok(false);
+    }
+    persisted.insert(notification_key.to_string());
+    if let Err(error) = save_waiting_notification_ledger(
+        &waiting_notification_ledger_path(&state.store),
+        &persisted,
+    ) {
+        persisted.remove(notification_key);
+        return Err(error);
+    }
+    Ok(true)
+}
+
+async fn release_waiting_notification(
     state: &Arc<AppState>,
     notification_key: &str,
 ) -> Result<(), String> {
     let mut persisted = state.persisted_waiting_notifications.lock().await;
-    if !persisted.insert(notification_key.to_string()) {
+    if !persisted.remove(notification_key) {
         return Ok(());
     }
-    save_waiting_notification_ledger(&waiting_notification_ledger_path(&state.store), &persisted)
+    if let Err(error) = save_waiting_notification_ledger(
+        &waiting_notification_ledger_path(&state.store),
+        &persisted,
+    ) {
+        persisted.insert(notification_key.to_string());
+        return Err(error);
+    }
+    Ok(())
 }
 
 async fn baseline_waiting_notifications(
@@ -971,18 +997,32 @@ pub(super) async fn notify_webhook_waiting(
     }
 
     let notification_key = waiting_notification_key(&session_id, turn_id, waiting_id);
-    if state
-        .persisted_waiting_notifications
-        .lock()
-        .await
-        .contains(&notification_key)
-    {
-        return Ok(json!({"status":"duplicate"}));
-    }
     {
         let mut notifications = state.webhook_notifications.lock().await;
         if !notifications.try_reserve(notification_key.clone(), &[]) {
             return Ok(json!({"status":"duplicate"}));
+        }
+    }
+    // Feishu and Telegram webhooks provide no usable idempotency key. Reserve
+    // on disk before sending so a crash after remote acceptance cannot resend
+    // the same waiting notification after restart.
+    match reserve_waiting_notification(state, &notification_key).await {
+        Ok(true) => {}
+        Ok(false) => {
+            state
+                .webhook_notifications
+                .lock()
+                .await
+                .abandon(&notification_key);
+            return Ok(json!({"status":"duplicate"}));
+        }
+        Err(error) => {
+            state
+                .webhook_notifications
+                .lock()
+                .await
+                .abandon(&notification_key);
+            return Err(error);
         }
     }
     let session_name = webhook_session_name(state, payload, &session_id).await;
@@ -998,11 +1038,17 @@ pub(super) async fn notify_webhook_waiting(
     .with_reasoning_effort(reasoning_effort);
     if let Err(error) = dispatch_webhook_channels(state, channels, &event, &notification_key).await
     {
+        let rollback_error = release_waiting_notification(state, &notification_key)
+            .await
+            .err();
         state
             .webhook_notifications
             .lock()
             .await
             .abandon(&notification_key);
+        if let Some(rollback_error) = rollback_error {
+            return Err(format!("{error}；等待通知预留回滚失败：{rollback_error}"));
+        }
         return Err(error);
     }
     state
@@ -1010,7 +1056,6 @@ pub(super) async fn notify_webhook_waiting(
         .lock()
         .await
         .settle(notification_key.clone());
-    persist_waiting_notification(state, &notification_key).await?;
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
 #[cfg(test)]
@@ -1021,9 +1066,10 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
-    use tokio::sync::{Mutex, oneshot};
+    use tokio::sync::{Mutex, RwLock, oneshot};
 
     use super::*;
+    use crate::notifications::NotificationChannelKind;
     use crate::pending_approval::{AbortedTurn, PendingApproval, StartedTurn};
 
     fn lifecycle(started: &[(&str, &str)], completed: &[(&str, &str)]) -> RecentSessionEvents {
@@ -1205,6 +1251,130 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[tokio::test]
+    async fn waiting_notification_is_reserved_on_disk_before_delivery() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (respond_tx, respond_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let bytes_read = socket.read(&mut request).await.unwrap();
+            assert!(bytes_read > 0);
+            request_seen_tx.send(()).unwrap();
+            respond_rx.await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 10\r\nconnection: close\r\n\r\n{\"code\":0}",
+                )
+                .await
+                .unwrap();
+        });
+        let mut config = CodeyConfig::default();
+        config.webhook.channels = vec![NotificationChannelConfig {
+            id: "local-feishu".to_string(),
+            kind: NotificationChannelKind::Feishu,
+            enabled: true,
+            url: format!("http://{address}"),
+            ..NotificationChannelConfig::default()
+        }];
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            config: RwLock::new(config),
+            webhook_notifications: Mutex::new(WebhookNotificationState::default()),
+            persisted_waiting_notifications: Mutex::new(HashSet::new()),
+            ..AppState::default()
+        });
+        let notification_key =
+            waiting_notification_key("session-durable", "turn-durable", "approval-durable");
+        let payload = json!({
+            "sessionId": "session-durable",
+            "turnId": "turn-durable",
+            "waitingId": "approval-durable",
+            "sessionName": "Durable waiting notification",
+        });
+        let notify_state = Arc::clone(&state);
+        let notify_task =
+            tokio::spawn(async move { notify_webhook_waiting(&notify_state, &payload).await });
+
+        tokio::time::timeout(Duration::from_secs(2), request_seen_rx)
+            .await
+            .expect("notification request should reach the local server")
+            .unwrap();
+        assert!(
+            load_waiting_notification_ledger(&waiting_notification_ledger_path(&state.store))
+                .contains(&notification_key)
+        );
+
+        respond_tx.send(()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), notify_task)
+            .await
+            .expect("notification delivery should finish")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["status"], "ok");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_waiting_delivery_releases_the_durable_reservation() {
+        use tokio::net::TcpListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let unused_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unused_address = unused_listener.local_addr().unwrap();
+        drop(unused_listener);
+        let mut config = CodeyConfig::default();
+        config.webhook.channels = vec![NotificationChannelConfig {
+            id: "unreachable-feishu".to_string(),
+            kind: NotificationChannelKind::Feishu,
+            enabled: true,
+            url: format!("http://{unused_address}"),
+            ..NotificationChannelConfig::default()
+        }];
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            config: RwLock::new(config),
+            webhook_notifications: Mutex::new(WebhookNotificationState::default()),
+            persisted_waiting_notifications: Mutex::new(HashSet::new()),
+            ..AppState::default()
+        });
+        let notification_key =
+            waiting_notification_key("session-retry", "turn-retry", "approval-retry");
+        let payload = json!({
+            "sessionId": "session-retry",
+            "turnId": "turn-retry",
+            "waitingId": "approval-retry",
+            "sessionName": "Retry waiting notification",
+        });
+
+        assert!(notify_webhook_waiting(&state, &payload).await.is_err());
+
+        assert!(
+            !load_waiting_notification_ledger(&waiting_notification_ledger_path(&state.store))
+                .contains(&notification_key)
+        );
+        assert!(
+            !state
+                .persisted_waiting_notifications
+                .lock()
+                .await
+                .contains(&notification_key)
+        );
+        assert!(
+            !state
+                .webhook_notifications
+                .lock()
+                .await
+                .is_known(&notification_key)
+        );
     }
 
     #[test]
