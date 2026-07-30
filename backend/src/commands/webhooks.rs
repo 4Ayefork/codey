@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,6 +22,68 @@ use crate::session_metadata;
 struct WaitingNotificationLedger {
     #[serde(default)]
     notification_keys: Vec<String>,
+}
+
+const WEBHOOK_NOTIFICATION_HISTORY_LIMIT: usize = 2048;
+
+#[derive(Debug, Default)]
+pub(super) struct WebhookNotificationState {
+    in_flight: HashSet<String>,
+    settled: HashSet<String>,
+    settled_order: VecDeque<String>,
+}
+
+impl WebhookNotificationState {
+    pub(super) fn from_settled(keys: impl IntoIterator<Item = String>) -> Self {
+        let mut state = Self::default();
+        state.extend_settled(keys);
+        state
+    }
+
+    fn is_known(&self, key: &str) -> bool {
+        self.in_flight.contains(key) || self.settled.contains(key)
+    }
+
+    fn was_settled(&self, key: &str) -> bool {
+        self.settled.contains(key)
+    }
+
+    fn try_reserve(&mut self, key: String, mutually_exclusive_keys: &[&str]) -> bool {
+        if self.is_known(&key)
+            || mutually_exclusive_keys
+                .iter()
+                .any(|candidate| self.is_known(candidate))
+        {
+            return false;
+        }
+        self.in_flight.insert(key)
+    }
+
+    fn abandon(&mut self, key: &str) {
+        self.in_flight.remove(key);
+    }
+
+    fn settle(&mut self, key: String) {
+        self.in_flight.remove(&key);
+        self.remember_settled(key);
+    }
+
+    fn extend_settled(&mut self, keys: impl IntoIterator<Item = String>) {
+        for key in keys {
+            self.remember_settled(key);
+        }
+    }
+
+    fn remember_settled(&mut self, key: String) {
+        if self.settled.insert(key.clone()) {
+            self.settled_order.push_back(key);
+        }
+        while self.settled_order.len() > WEBHOOK_NOTIFICATION_HISTORY_LIMIT {
+            if let Some(oldest) = self.settled_order.pop_front() {
+                self.settled.remove(&oldest);
+            }
+        }
+    }
 }
 
 fn waiting_notification_ledger_path(store: &ConfigStore) -> PathBuf {
@@ -342,7 +404,11 @@ async fn baseline_waiting_notifications(
         persisted.extend(baseline.iter().cloned());
         (persisted.len() != previous_len).then(|| persisted.clone())
     };
-    state.webhook_notifications.lock().await.extend(baseline);
+    state
+        .webhook_notifications
+        .lock()
+        .await
+        .extend_settled(baseline);
     if let Some(persisted) = persisted_snapshot {
         let _ = save_waiting_notification_ledger(
             &waiting_notification_ledger_path(&state.store),
@@ -619,8 +685,8 @@ async fn terminal_notification_was_sent(
     turn_id: &str,
 ) -> bool {
     let keys = terminal_notification_keys(session_id, turn_id);
-    let sent = state.webhook_notifications.lock().await;
-    keys.iter().any(|key| sent.contains(key))
+    let notifications = state.webhook_notifications.lock().await;
+    keys.iter().any(|key| notifications.is_known(key))
 }
 
 async fn dispatch_webhook_channels(
@@ -638,10 +704,10 @@ async fn dispatch_webhook_channels(
         })
         .collect::<Vec<_>>();
     let deliveries = {
-        let sent = state.webhook_notifications.lock().await;
+        let notifications = state.webhook_notifications.lock().await;
         configured_channels
             .into_iter()
-            .filter(|(_, delivery_key)| !sent.contains(delivery_key))
+            .filter(|(_, delivery_key)| !notifications.was_settled(delivery_key))
             .collect::<Vec<_>>()
     };
     let deliveries = deliveries.into_iter().map(|(channel, delivery_key)| {
@@ -660,16 +726,16 @@ async fn dispatch_webhook_channels(
     });
     let results = join_all(deliveries).await;
     let mut errors = Vec::new();
-    let mut sent = state.webhook_notifications.lock().await;
+    let mut notifications = state.webhook_notifications.lock().await;
     for (delivery_key, result) in results {
         match result {
             Ok(()) => {
-                sent.insert(delivery_key);
+                notifications.remember_settled(delivery_key);
             }
             Err(error) => errors.push(error),
         }
     }
-    drop(sent);
+    drop(notifications);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -699,14 +765,10 @@ async fn dispatch_settled_webhook_failure(
 
     let [completed_key, failed_key] = terminal_notification_keys(&session_id, &turn_id);
     {
-        let mut sent = state.webhook_notifications.lock().await;
-        if sent.contains(&completed_key) || sent.contains(&failed_key) {
+        let mut notifications = state.webhook_notifications.lock().await;
+        if !notifications.try_reserve(failed_key.clone(), &[&completed_key]) {
             return Ok(json!({"status":"duplicate"}));
         }
-        if sent.len() >= 2048 {
-            sent.clear();
-        }
-        sent.insert(failed_key.clone());
     }
     let session_name = webhook_session_name(state, payload, &session_id).await;
     let event = NotificationEvent::new(
@@ -720,9 +782,14 @@ async fn dispatch_settled_webhook_failure(
     .with_session_name(session_name)
     .with_reasoning_effort(reasoning_effort);
     if let Err(error) = dispatch_webhook_channels(state, channels, &event, &failed_key).await {
-        state.webhook_notifications.lock().await.remove(&failed_key);
+        state
+            .webhook_notifications
+            .lock()
+            .await
+            .abandon(&failed_key);
         return Err(error);
     }
+    state.webhook_notifications.lock().await.settle(failed_key);
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
 
@@ -813,15 +880,11 @@ pub(super) async fn notify_webhook_completion(
 
     let notification_key = format!("completed:{session_id}:{turn_id}");
     {
-        let mut sent = state.webhook_notifications.lock().await;
+        let mut notifications = state.webhook_notifications.lock().await;
         let failed_key = format!("failed:{session_id}:{turn_id}");
-        if sent.contains(&notification_key) || sent.contains(&failed_key) {
+        if !notifications.try_reserve(notification_key.clone(), &[&failed_key]) {
             return Ok(json!({"status":"duplicate"}));
         }
-        if sent.len() >= 2048 {
-            sent.clear();
-        }
-        sent.insert(notification_key.clone());
     }
     let session_name = webhook_session_name(state, payload, &session_id).await;
     let event = NotificationEvent::new(
@@ -840,9 +903,14 @@ pub(super) async fn notify_webhook_completion(
             .webhook_notifications
             .lock()
             .await
-            .remove(&notification_key);
+            .abandon(&notification_key);
         return Err(error);
     }
+    state
+        .webhook_notifications
+        .lock()
+        .await
+        .settle(notification_key);
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
 
@@ -912,14 +980,10 @@ pub(super) async fn notify_webhook_waiting(
         return Ok(json!({"status":"duplicate"}));
     }
     {
-        let mut sent = state.webhook_notifications.lock().await;
-        if sent.contains(&notification_key) {
+        let mut notifications = state.webhook_notifications.lock().await;
+        if !notifications.try_reserve(notification_key.clone(), &[]) {
             return Ok(json!({"status":"duplicate"}));
         }
-        if sent.len() >= 2048 {
-            sent.clear();
-        }
-        sent.insert(notification_key.clone());
     }
     let session_name = webhook_session_name(state, payload, &session_id).await;
     let event = NotificationEvent::new(
@@ -938,9 +1002,14 @@ pub(super) async fn notify_webhook_waiting(
             .webhook_notifications
             .lock()
             .await
-            .remove(&notification_key);
+            .abandon(&notification_key);
         return Err(error);
     }
+    state
+        .webhook_notifications
+        .lock()
+        .await
+        .settle(notification_key.clone());
     persist_waiting_notification(state, &notification_key).await?;
     Ok(json!({"status":"ok","eventId":event.event_id}))
 }
@@ -1005,6 +1074,28 @@ mod tests {
             webhook_turn_configuration(&events, "session-1", "missing"),
             ("Codex".to_string(), "默认".to_string())
         );
+    }
+
+    #[test]
+    fn bounded_notification_history_never_evicts_an_in_flight_reservation() {
+        let mut notifications = WebhookNotificationState::default();
+        let in_flight = "completed:active-session:active-turn".to_string();
+        assert!(notifications.try_reserve(in_flight.clone(), &[]));
+
+        for index in 0..=WEBHOOK_NOTIFICATION_HISTORY_LIMIT {
+            notifications.remember_settled(format!("completed:old-session:{index}"));
+        }
+
+        assert!(notifications.is_known(&in_flight));
+        assert!(!notifications.try_reserve(in_flight.clone(), &[]));
+        assert_eq!(
+            notifications.settled.len(),
+            WEBHOOK_NOTIFICATION_HISTORY_LIMIT
+        );
+        assert!(!notifications.was_settled("completed:old-session:0"));
+        assert!(notifications.was_settled(&format!(
+            "completed:old-session:{WEBHOOK_NOTIFICATION_HISTORY_LIMIT}"
+        )));
     }
 
     #[test]
@@ -1162,7 +1253,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let state = Arc::new(AppState {
             store: ConfigStore::new(directory.path().join("config.json")),
-            webhook_notifications: Mutex::new(HashSet::new()),
+            webhook_notifications: Mutex::new(WebhookNotificationState::default()),
             persisted_waiting_notifications: Mutex::new(HashSet::new()),
             ..AppState::default()
         });
@@ -1182,12 +1273,12 @@ mod tests {
         baseline_waiting_notifications(&state, std::slice::from_ref(&before_start)).await;
 
         let baseline = state.webhook_notifications.lock().await;
-        assert!(baseline.contains(&waiting_notification_key(
+        assert!(baseline.is_known(&waiting_notification_key(
             &before_start.session_id,
             &before_start.turn_id,
             &before_start.waiting_id,
         )));
-        assert!(!baseline.contains(&waiting_notification_key(
+        assert!(!baseline.is_known(&waiting_notification_key(
             &during_start.session_id,
             &during_start.turn_id,
             &during_start.waiting_id,

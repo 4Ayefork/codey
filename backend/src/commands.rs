@@ -43,8 +43,8 @@ use updates::current_update_platform;
 use updates::{UpdateManifest, assess_update_manifest, current_update_arch};
 pub use updates::{check_for_updates, download_update, install_downloaded_update};
 use webhooks::{
-    initial_waiting_notifications, notify_webhook_completion, notify_webhook_waiting,
-    sync_waiting_webhook_watcher, test_webhook,
+    WebhookNotificationState, initial_waiting_notifications, notify_webhook_completion,
+    notify_webhook_waiting, sync_waiting_webhook_watcher, test_webhook,
 };
 
 use crate::cc_switch;
@@ -83,7 +83,7 @@ pub struct AppState {
     restart_task: Mutex<Option<ScheduledRestart>>,
     runtime_generation: AtomicU64,
     session_titles: RwLock<HashMap<String, String>>,
-    webhook_notifications: Mutex<HashSet<String>>,
+    webhook_notifications: Mutex<WebhookNotificationState>,
     persisted_waiting_notifications: Mutex<HashSet<String>>,
     recent_session_event_cache: Mutex<Option<pending_approval::RecentSessionEventCache>>,
     waiting_watcher_shutdown: Mutex<Option<oneshot::Sender<()>>>,
@@ -138,7 +138,9 @@ impl Default for AppState {
             restart_task: Mutex::new(None),
             runtime_generation: AtomicU64::new(0),
             session_titles: RwLock::new(HashMap::new()),
-            webhook_notifications: Mutex::new(persisted_waiting_notifications.clone()),
+            webhook_notifications: Mutex::new(WebhookNotificationState::from_settled(
+                persisted_waiting_notifications.iter().cloned(),
+            )),
             persisted_waiting_notifications: Mutex::new(persisted_waiting_notifications),
             recent_session_event_cache: Mutex::new(Some(
                 pending_approval::RecentSessionEventCache::default(),
