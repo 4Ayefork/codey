@@ -34,6 +34,9 @@ pub struct NotificationChannelConfig {
     pub clear_bot_token: bool,
     #[serde(default)]
     pub chat_id: String,
+    #[cfg(test)]
+    #[serde(skip)]
+    pub allow_insecure_test_url: bool,
 }
 
 impl Default for NotificationChannelConfig {
@@ -49,6 +52,8 @@ impl Default for NotificationChannelConfig {
             bot_token_configured: false,
             clear_bot_token: false,
             chat_id: String::new(),
+            #[cfg(test)]
+            allow_insecure_test_url: false,
         }
     }
 }
@@ -61,6 +66,40 @@ impl NotificationChannelConfig {
                 !self.bot_token.trim().is_empty() && !self.chat_id.trim().is_empty()
             }
         }
+    }
+
+    pub(crate) fn feishu_webhook_url(&self) -> Result<reqwest::Url, &'static str> {
+        const INVALID_URL: &str =
+            "飞书机器人 Webhook 仅支持 open.feishu.cn 或 open.larksuite.com 的官方 HTTPS 地址";
+        let value = self.url.trim();
+        if value.is_empty() {
+            return Err("请先填写飞书机器人 Webhook 地址");
+        }
+        let url = reqwest::Url::parse(value).map_err(|_| INVALID_URL)?;
+        #[cfg(test)]
+        if self.allow_insecure_test_url {
+            return Ok(url);
+        }
+        let allowed_host = matches!(
+            url.host_str(),
+            Some("open.feishu.cn" | "open.larksuite.com")
+        );
+        let hook = url
+            .path()
+            .strip_prefix("/open-apis/bot/v2/hook/")
+            .filter(|hook| !hook.is_empty() && !hook.contains('/'));
+        if url.scheme() != "https"
+            || !allowed_host
+            || url.port_or_known_default() != Some(443)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || hook.is_none()
+        {
+            return Err(INVALID_URL);
+        }
+        Ok(url)
     }
 }
 
@@ -116,6 +155,15 @@ impl WebhookConfig {
         self.channels
             .iter()
             .any(|channel| channel.enabled && channel.is_configured())
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        for channel in &self.channels {
+            if channel.kind == NotificationChannelKind::Feishu && !channel.url.trim().is_empty() {
+                channel.feishu_webhook_url().map_err(ToString::to_string)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn merge_redacted_secrets(&mut self, previous: &Self) {
@@ -184,6 +232,36 @@ mod tests {
         assert!(config.channels[0].url_configured);
         assert_eq!(config.channels[1].kind, NotificationChannelKind::Telegram);
         assert!(config.channels[1].bot_token_configured);
+    }
+
+    #[test]
+    fn feishu_webhooks_require_an_official_https_endpoint() {
+        for accepted in [
+            "https://open.feishu.cn/open-apis/bot/v2/hook/secret",
+            "https://open.larksuite.com/open-apis/bot/v2/hook/secret",
+            "https://open.feishu.cn:443/open-apis/bot/v2/hook/secret",
+        ] {
+            let config = NotificationChannelConfig {
+                url: accepted.to_string(),
+                ..NotificationChannelConfig::default()
+            };
+            assert!(config.feishu_webhook_url().is_ok(), "{accepted}");
+        }
+
+        for rejected in [
+            "http://open.feishu.cn/open-apis/bot/v2/hook/secret",
+            "https://127.0.0.1/open-apis/bot/v2/hook/secret",
+            "https://open.feishu.cn.evil.example/open-apis/bot/v2/hook/secret",
+            "https://open.feishu.cn/other/path",
+            "https://open.feishu.cn/open-apis/bot/v2/hook/secret?redirect=1",
+            "https://user@open.feishu.cn/open-apis/bot/v2/hook/secret",
+        ] {
+            let config = NotificationChannelConfig {
+                url: rejected.to_string(),
+                ..NotificationChannelConfig::default()
+            };
+            assert!(config.feishu_webhook_url().is_err(), "{rejected}");
+        }
     }
 
     #[test]

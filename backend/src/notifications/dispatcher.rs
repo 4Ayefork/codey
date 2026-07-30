@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-#[cfg(test)]
-use anyhow::Context;
-use anyhow::Result;
-use reqwest::{Client, StatusCode};
+use anyhow::{Context, Result};
+use reqwest::{Client, StatusCode, redirect};
 use serde_json::{Value, json};
 
 use super::channels::{NotificationChannelAdapter, adapter_for};
@@ -52,12 +50,7 @@ pub struct NotificationDispatcher {
 impl NotificationDispatcher {
     #[cfg(test)]
     pub fn new(config: NotificationChannelConfig) -> Result<Self> {
-        let client = Client::builder()
-            .user_agent("Codey/0.1")
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(8))
-            .build()
-            .context("创建通知 HTTP 客户端失败")?;
+        let client = notification_http_client()?;
         Ok(Self::with_client(client, config))
     }
 
@@ -166,6 +159,16 @@ impl NotificationDispatcher {
     }
 }
 
+pub(crate) fn notification_http_client() -> Result<Client> {
+    Client::builder()
+        .user_agent(format!("Codey/{}", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .redirect(redirect::Policy::none())
+        .build()
+        .context("创建通知 HTTP 客户端失败")
+}
+
 fn validate_http_response(
     adapter: &dyn NotificationChannelAdapter,
     status: StatusCode,
@@ -239,6 +242,7 @@ mod tests {
             kind: NotificationChannelKind::Feishu,
             enabled: true,
             url: format!("http://{address}"),
+            allow_insecure_test_url: true,
             ..NotificationChannelConfig::default()
         };
         let dispatcher = NotificationDispatcher::with_client(client, config);
@@ -257,6 +261,42 @@ mod tests {
         assert!(error.to_string().contains("已停止自动重试"));
         server.await.unwrap();
         assert_eq!(request_count.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn notification_client_never_follows_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_address = redirect_listener.local_addr().unwrap();
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_address = target_listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = redirect_listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            let response = format!(
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{target_address}/leak\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let response = notification_http_client()
+            .unwrap()
+            .post(format!("http://{redirect_address}/webhook"))
+            .body("notification-secret")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        server.await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), target_listener.accept())
+                .await
+                .is_err()
+        );
     }
 
     #[test]

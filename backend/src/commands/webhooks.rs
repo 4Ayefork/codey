@@ -627,7 +627,8 @@ pub(super) async fn test_webhook(
             .next()
             .ok_or_else(|| "请先添加通知渠道".to_string())?,
     };
-    let dispatcher = NotificationDispatcher::with_client(state.http_client.clone(), channel);
+    let dispatcher =
+        NotificationDispatcher::with_client(state.webhook_http_client.clone(), channel);
     dispatcher.test().await.map_err(|error| error.to_string())
 }
 
@@ -755,7 +756,7 @@ async fn dispatch_webhook_channels(
             .collect::<Vec<_>>()
     };
     let deliveries = deliveries.into_iter().map(|(channel, delivery_key)| {
-        let client = state.http_client.clone();
+        let client = state.webhook_http_client.clone();
         let event = event.clone();
         async move {
             let dispatcher = NotificationDispatcher::with_client(client, channel);
@@ -1315,6 +1316,7 @@ mod tests {
             kind: NotificationChannelKind::Feishu,
             enabled: true,
             url: format!("http://{address}"),
+            allow_insecure_test_url: true,
             ..NotificationChannelConfig::default()
         }];
         let state = Arc::new(AppState {
@@ -1369,6 +1371,7 @@ mod tests {
             kind: NotificationChannelKind::Feishu,
             enabled: true,
             url: format!("http://{unused_address}"),
+            allow_insecure_test_url: true,
             ..NotificationChannelConfig::default()
         }];
         let state = Arc::new(AppState {
@@ -1433,13 +1436,15 @@ mod tests {
             kind: NotificationChannelKind::Feishu,
             enabled: true,
             url: format!("http://{address}"),
+            allow_insecure_test_url: true,
             ..NotificationChannelConfig::default()
         }];
         let state = Arc::new(AppState {
             store: ConfigStore::new(directory.path().join("config.json")),
             config: RwLock::new(config),
-            http_client: reqwest::Client::builder()
+            webhook_http_client: reqwest::Client::builder()
                 .timeout(Duration::from_millis(50))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap(),
             webhook_notifications: Mutex::new(WebhookNotificationState::default()),

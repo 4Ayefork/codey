@@ -22,17 +22,17 @@ impl NotificationChannelAdapter for FeishuChannel<'_> {
     }
 
     fn configuration_error(&self) -> Option<&'static str> {
-        self.config
-            .url
-            .trim()
-            .is_empty()
-            .then_some("请先填写飞书机器人 Webhook 地址")
+        self.config.feishu_webhook_url().err()
     }
 
     fn build_request(&self, client: &Client, event: &NotificationEvent) -> Result<RequestBuilder> {
         let body = feishu_body(event)?;
+        let url = self
+            .config
+            .feishu_webhook_url()
+            .map_err(anyhow::Error::msg)?;
         Ok(client
-            .post(self.config.url.trim())
+            .post(url)
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body))
     }

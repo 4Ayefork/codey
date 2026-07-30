@@ -75,6 +75,7 @@ pub struct AppState {
     pub config: RwLock<CodeyConfig>,
     config_write_lock: Mutex<()>,
     pub http_client: reqwest::Client,
+    pub webhook_http_client: reqwest::Client,
     pub runtime: Mutex<Option<Arc<CodeyRuntime>>>,
     runtime_operation: Mutex<()>,
     pub trace_log_stats: TraceLogStatsHandle,
@@ -131,6 +132,8 @@ impl Default for AppState {
                 .connect_timeout(Duration::from_secs(5))
                 .build()
                 .expect("shared Codey HTTP client should be constructible"),
+            webhook_http_client: crate::notifications::notification_http_client()
+                .expect("notification HTTP client should be constructible"),
             runtime: Mutex::new(None),
             runtime_operation: Mutex::new(()),
             trace_log_stats: TraceLogStatsHandle::idle(),
@@ -594,6 +597,7 @@ async fn save_codey_config_locked(
     config_input
         .webhook
         .merge_redacted_secrets(&previous.webhook);
+    config_input.webhook.validate()?;
     config.webhook = config_input.webhook;
     config.codex_app_path = config_input.codex_app_path;
     config.user_scripts = config_input.user_scripts;

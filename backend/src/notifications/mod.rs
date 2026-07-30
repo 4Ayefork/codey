@@ -6,4 +6,5 @@ mod formatting;
 
 pub use config::{NotificationChannelConfig, NotificationChannelKind, WebhookConfig};
 pub use dispatcher::NotificationDispatcher;
+pub(crate) use dispatcher::notification_http_client;
 pub use event::NotificationEvent;
