@@ -67,7 +67,7 @@ test("settings exposes the Windows optimization patch status only on Windows cli
   const [sectionsSource, typesSource, commandsSource] = await Promise.all([
     readFile(new URL("../src/AppSections.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/App.types.ts", import.meta.url), "utf8"),
-    readFile(new URL("../backend/src/commands.rs", import.meta.url), "utf8"),
+    readFile(new URL("../backend/src/commands/runtime.rs", import.meta.url), "utf8"),
   ]);
 
   assert.match(commandsSource, /"clientPlatform": current_update_platform\(\)/);

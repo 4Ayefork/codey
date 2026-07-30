@@ -8,6 +8,7 @@ const paths = {
   types: new URL("../src/App.types.ts", import.meta.url),
   config: new URL("../backend/src/config.rs", import.meta.url),
   commands: new URL("../backend/src/commands.rs", import.meta.url),
+  runtimeCommands: new URL("../backend/src/commands/runtime.rs", import.meta.url),
   cdp: new URL("../backend/src/cdp.rs", import.meta.url),
   launcher: new URL("../backend/src/launcher.rs", import.meta.url),
   patch: new URL("../backend/src/codex_startup_patch.rs", import.meta.url),
@@ -66,7 +67,7 @@ test("the experimental feature card exposes all switches with concise descriptio
 });
 
 test("user feature settings persist, require restart, and override official values last", async () => {
-  const { config, commands, cdp, launcher, patch } = await sources();
+  const { config, commands, runtimeCommands, cdp, launcher, patch } = await sources();
 
   assert.match(config, /pub experimental_features: ExperimentalFeaturesConfig/);
   assert.match(
@@ -78,7 +79,7 @@ test("user feature settings persist, require restart, and override official valu
     /applied\.experimental_features != current\.experimental_features/,
   );
   assert.match(commands, /"sync_official_experimental_features"/);
-  assert.match(commands, /"experimentalFeatureRuntime"/);
+  assert.match(runtimeCommands, /"experimentalFeatureRuntime"/);
   assert.match(cdp, /_store\?\._valuesForExternalUse/);
   assert.match(cdp, /read_experimental_feature_runtime_status/);
   assert.match(cdp, /__CODEY_EXPERIMENTAL_FEATURE_RUNTIME__/);

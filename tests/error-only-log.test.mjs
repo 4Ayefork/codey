@@ -25,12 +25,13 @@ test("startup keeps the original loading page without progress tracing", async (
 });
 
 test("error log is failure-only, daily, and cross-process serialized", async () => {
-  const [errorLog, launcher, cdp, commands, lib, startupPatch] =
+  const [errorLog, launcher, cdp, commands, runtimeCommands, lib, startupPatch] =
     await Promise.all([
       source("backend/src/error_log.rs"),
       source("backend/src/launcher.rs"),
       source("backend/src/cdp.rs"),
       source("backend/src/commands.rs"),
+      source("backend/src/commands/runtime.rs"),
       source("backend/src/lib.rs"),
       source("backend/src/codex_startup_patch.rs"),
     ]);
@@ -55,7 +56,7 @@ test("error log is failure-only, daily, and cross-process serialized", async () 
   }
   assert.match(cdp, /"injection_script_failed"/);
   assert.match(cdp, /"injection_status_failed"/);
-  assert.match(commands, /"runtime_restart_failed"/);
+  assert.match(runtimeCommands, /"runtime_restart_failed"/);
   assert.match(commands, /"repair_plugin_marketplace"/);
   assert.match(lib, /"auto_launch_codey_runtime"/);
   assert.match(startupPatch, /recordCodeyPatchFailure/);

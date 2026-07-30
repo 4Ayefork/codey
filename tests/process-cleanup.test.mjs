@@ -14,7 +14,7 @@ test("every shutdown path reaps Codex and Codey process trees", async () => {
       "utf8",
     ).then(normalizeLineEndings),
     readFile(
-      new URL("../backend/src/commands.rs", import.meta.url),
+      new URL("../backend/src/commands/runtime.rs", import.meta.url),
       "utf8",
     ).then(normalizeLineEndings),
     readFile(

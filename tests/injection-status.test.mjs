@@ -9,6 +9,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     cdp,
     launcher,
     commands,
+    runtimeCommands,
     app,
     overlay,
     types,
@@ -19,6 +20,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     readFile(new URL("backend/src/cdp.rs", root), "utf8"),
     readFile(new URL("backend/src/launcher.rs", root), "utf8"),
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
+    readFile(new URL("backend/src/commands/runtime.rs", root), "utf8"),
     readFile(new URL("src/App.tsx", root), "utf8"),
     readFile(new URL("src/overlay.tsx", root), "utf8"),
     readFile(new URL("src/App.types.ts", root), "utf8"),
@@ -36,10 +38,10 @@ test("script injection diagnostics report runtime evidence without continuous po
   );
   assert.match(launcher, /watchdog_injection_statuses\.write\(\)\.await/);
   assert.match(
-    commands,
+    runtimeCommands,
     /runtime\.injection_statuses\.read\(\)\.await\.clone\(\)/,
   );
-  assert.match(commands, /"injectionScripts"/);
+  assert.match(runtimeCommands, /"injectionScripts"/);
   assert.match(
     commands,
     /"refresh_injection_status"\s*=>\s*refresh_injection_status/,

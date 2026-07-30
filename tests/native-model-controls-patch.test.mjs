@@ -649,16 +649,16 @@ test("API and ChatGPT auth share model-aware native service-tier controls", asyn
 });
 
 test("restarting Codex stops the current runtime and relaunches it with Codey", async () => {
-  const [commandsSource, launcherSource, appSource] = await Promise.all([
-    readFile(new URL("../backend/src/commands.rs", import.meta.url), "utf8")
+  const [runtimeSource, launcherSource, appSource] = await Promise.all([
+    readFile(new URL("../backend/src/commands/runtime.rs", import.meta.url), "utf8")
       .then(normalizeLineEndings),
     readFile(new URL("../backend/src/launcher.rs", import.meta.url), "utf8")
       .then(normalizeLineEndings),
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   ]);
-  const restartFlow = commandsSource.slice(
-    commandsSource.indexOf("pub async fn schedule_restart_codey_runtime"),
-    commandsSource.indexOf("pub async fn stop_codey_runtime"),
+  const restartFlow = runtimeSource.slice(
+    runtimeSource.indexOf("pub async fn schedule_restart_codey_runtime"),
+    runtimeSource.indexOf("pub async fn stop_codey_runtime"),
   );
 
   assert.match(restartFlow, /runtime_operation\.lock\(\)/);
@@ -669,11 +669,11 @@ test("restarting Codex stops the current runtime and relaunches it with Codey", 
   assert.match(restartFlow, /oneshot::channel\(\)/);
   assert.match(restartFlow, /is_shutting_down\(\)/);
   assert.match(
-    commandsSource,
+    runtimeSource,
     /pub async fn begin_shutdown[\s\S]*?cancel\.send\(\(\)\)[\s\S]*?task\.await/,
   );
   assert.match(
-    commandsSource,
+    runtimeSource,
     /runtime_generation\.load\(Ordering::Acquire\) == runtime_generation/,
   );
   assert.match(
@@ -683,8 +683,8 @@ test("restarting Codex stops the current runtime and relaunches it with Codey", 
   assert.match(launcherSource, /macos_codex_process_ids\(app_dir\)/);
   assert.match(launcherSource, /owned_unix_codex_process_ids/);
   assert.match(launcherSource, /libc::SIGKILL/);
-  assert.doesNotMatch(commandsSource, /"close_codex"/);
-  assert.doesNotMatch(commandsSource, /show_manual_relaunch_prompt/);
+  assert.doesNotMatch(runtimeSource, /"close_codex"/);
+  assert.doesNotMatch(runtimeSource, /show_manual_relaunch_prompt/);
   assert.match(appSource, /await invoke\("restart_codey"\)/);
   assert.match(appSource, /Codey 将自动重新拉起客户端/);
   assert.doesNotMatch(appSource, /关闭 Codex/);
