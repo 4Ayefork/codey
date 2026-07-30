@@ -21,6 +21,7 @@ function TelegramChannelEditorComponent({
           <Input
             type="password"
             value={channel.botToken}
+            disabled={disabled}
             onChange={(event) =>
               onChange({
                 botToken: event.target.value,
@@ -61,6 +62,7 @@ function TelegramChannelEditorComponent({
           <IconBrandTelegram size={15} aria-hidden="true" />
           <Input
             value={channel.chatId}
+            disabled={disabled}
             onChange={(event) => onChange({ chatId: event.target.value })}
             placeholder="-1001234567890"
             spellCheck={false}

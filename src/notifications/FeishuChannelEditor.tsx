@@ -18,6 +18,7 @@ function FeishuChannelEditorComponent({
           <Input
             type="password"
             value={channel.url}
+            disabled={disabled}
             onChange={(event) =>
               onChange({
                 url: event.target.value,
