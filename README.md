@@ -45,3 +45,11 @@ Codey 是 Codex 桌面客户端的增强启动器。打开 Codey 后，它会自
 - 删除、导入和恢复类会话操作会尽量保留备份，但仍建议谨慎使用。
 - Windows 和 macOS 上的部分运行策略需要先完全退出已有 Codex，再由 Codey 重新启动后生效。
 - 部分增强能力依赖当前 Codex 版本和当前线路支持情况，遇到不兼容时请以 Codey 控制台提示为准。
+- 
+## 联系方式
+
+Codey 由 [SuperGness](https://github.com/SuperGness) 创建和维护。集成、再分发、合作或任何其他事宜，欢迎联系：kimzane9991@gmail.com。
+
+## 致谢
+
+感谢 [linuxdo](https://linux.do/) 社区的讨论、分享与反馈。
