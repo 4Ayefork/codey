@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
 
-use super::NotificationChannelAdapter;
+use super::{NotificationChannelAdapter, bounded_remote_message};
 use crate::notifications::formatting::{format_duration, format_timestamp, plain_text_value};
 use crate::notifications::{NotificationChannelConfig, NotificationEvent};
 
@@ -38,11 +38,11 @@ impl NotificationChannelAdapter for TelegramChannel<'_> {
             .json(&telegram_body(event, &self.config.chat_id)))
     }
 
-    fn response_error(&self, body: &str) -> Option<String> {
-        telegram_response_error(body)
+    fn validate_response(&self, body: &str) -> std::result::Result<(), String> {
+        validate_telegram_response(body)
     }
 
-    fn sanitize_transport_error(&self, error: &str) -> String {
+    fn sanitize_error(&self, error: &str) -> String {
         let token = self.config.bot_token.trim();
         if token.is_empty() {
             error.to_string()
@@ -85,10 +85,15 @@ fn telegram_text(event: &NotificationEvent) -> String {
     )
 }
 
-fn telegram_response_error(body: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(body).ok()?;
-    if value.get("ok").and_then(Value::as_bool) == Some(true) {
-        return None;
+fn validate_telegram_response(body: &str) -> std::result::Result<(), String> {
+    let value = serde_json::from_str::<Value>(body)
+        .map_err(|_| "Telegram Bot API 返回了无法解析的响应".to_string())?;
+    let ok = value
+        .get("ok")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "Telegram Bot API 响应缺少成功状态".to_string())?;
+    if ok {
+        return Ok(());
     }
     let error_code = value
         .get("error_code")
@@ -99,8 +104,9 @@ fn telegram_response_error(body: &str) -> Option<String> {
         .get("description")
         .and_then(Value::as_str)
         .unwrap_or("未知错误");
-    Some(format!(
-        "Telegram Bot API 返回错误 {error_code}：{description}"
+    Err(format!(
+        "Telegram Bot API 返回错误 {error_code}：{}",
+        bounded_remote_message(description)
     ))
 }
 
@@ -130,15 +136,17 @@ mod tests {
     }
 
     #[test]
-    fn response_checks_bot_api_error() {
-        assert!(telegram_response_error(r#"{"ok":true,"result":{}}"#).is_none());
+    fn response_requires_an_explicit_success_flag() {
+        assert!(validate_telegram_response(r#"{"ok":true,"result":{}}"#).is_ok());
         assert!(
-            telegram_response_error(
+            validate_telegram_response(
                 r#"{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}"#
             )
-            .unwrap()
+            .unwrap_err()
             .contains("chat not found")
         );
+        assert!(validate_telegram_response("not json").is_err());
+        assert!(validate_telegram_response(r#"{"result":{}}"#).is_err());
     }
 
     #[test]
@@ -169,7 +177,7 @@ mod tests {
         };
         let channel = TelegramChannel::new(&config);
 
-        let error = channel.sanitize_transport_error(
+        let error = channel.sanitize_error(
             "request to https://api.telegram.org/bot123456:secret-token/sendMessage failed",
         );
 

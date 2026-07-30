@@ -3,10 +3,10 @@ use std::time::Duration;
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::Result;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 
-use super::channels::adapter_for;
+use super::channels::{NotificationChannelAdapter, adapter_for};
 use super::{NotificationChannelConfig, NotificationEvent};
 
 #[derive(Clone)]
@@ -46,22 +46,23 @@ impl NotificationDispatcher {
             match request.send().await {
                 Ok(response) => {
                     let status = response.status();
-                    let response_body = response.text().await.unwrap_or_default();
-                    if status.is_success() {
-                        match adapter.response_error(&response_body) {
-                            None => return Ok(()),
-                            Some(error) => last_error = Some(error),
+                    match response.text().await {
+                        Ok(response_body) => {
+                            match validate_http_response(adapter.as_ref(), status, &response_body) {
+                                Ok(()) => return Ok(()),
+                                Err(error) => last_error = Some(error),
+                            }
                         }
-                    } else {
-                        last_error = Some(format!(
-                            "{}返回 HTTP {status}：{}",
-                            adapter.display_name(),
-                            response_body.chars().take(300).collect::<String>()
-                        ));
+                        Err(error) => {
+                            last_error = Some(adapter.sanitize_error(&format!(
+                                "{}响应读取失败：{error}",
+                                adapter.display_name()
+                            )));
+                        }
                     }
                 }
                 Err(error) => {
-                    last_error = Some(adapter.sanitize_transport_error(&error.to_string()));
+                    last_error = Some(adapter.sanitize_error(&error.to_string()));
                 }
             }
             if attempt + 1 < attempts.max(1) {
@@ -72,7 +73,7 @@ impl NotificationDispatcher {
         Err(anyhow::anyhow!(
             "{}消息发送失败：{}",
             adapter.display_name(),
-            adapter.sanitize_transport_error(&error)
+            adapter.sanitize_error(&error)
         ))
     }
 
@@ -102,9 +103,27 @@ impl NotificationDispatcher {
     }
 }
 
+fn validate_http_response(
+    adapter: &dyn NotificationChannelAdapter,
+    status: StatusCode,
+    body: &str,
+) -> std::result::Result<(), String> {
+    let channel_result = adapter.validate_response(body);
+    if status.is_success() {
+        return channel_result.map_err(|error| adapter.sanitize_error(&error));
+    }
+
+    let error = match channel_result {
+        Ok(()) => format!("{}返回 HTTP {status}", adapter.display_name()),
+        Err(detail) => format!("{}返回 HTTP {status}：{detail}", adapter.display_name()),
+    };
+    Err(adapter.sanitize_error(&error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notifications::NotificationChannelKind;
 
     #[tokio::test]
     async fn test_requires_a_configured_channel() {
@@ -117,5 +136,43 @@ mod tests {
                 .to_string()
                 .contains("Webhook")
         );
+    }
+
+    #[test]
+    fn successful_http_status_still_requires_valid_channel_confirmation() {
+        let config = NotificationChannelConfig {
+            kind: NotificationChannelKind::Feishu,
+            url: "https://open.feishu.cn/open-apis/bot/v2/hook/secret".to_string(),
+            ..NotificationChannelConfig::default()
+        };
+        let adapter = adapter_for(&config);
+
+        let error =
+            validate_http_response(adapter.as_ref(), StatusCode::OK, "not json").unwrap_err();
+
+        assert!(error.contains("无法解析"));
+    }
+
+    #[test]
+    fn response_errors_are_bounded_and_do_not_expose_credentials() {
+        let secret_url = "https://open.feishu.cn/open-apis/bot/v2/hook/private-secret";
+        let config = NotificationChannelConfig {
+            kind: NotificationChannelKind::Feishu,
+            url: secret_url.to_string(),
+            ..NotificationChannelConfig::default()
+        };
+        let adapter = adapter_for(&config);
+        let response = serde_json::json!({
+            "code": 19021,
+            "msg": format!("{secret_url} {}", "x".repeat(500)),
+        })
+        .to_string();
+
+        let error = validate_http_response(adapter.as_ref(), StatusCode::BAD_REQUEST, &response)
+            .unwrap_err();
+
+        assert!(!error.contains(secret_url));
+        assert!(error.contains("***"));
+        assert!(error.chars().count() < 300);
     }
 }

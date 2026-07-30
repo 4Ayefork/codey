@@ -2,7 +2,7 @@ use anyhow::Result;
 use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
 
-use super::NotificationChannelAdapter;
+use super::{NotificationChannelAdapter, bounded_remote_message};
 use crate::notifications::formatting::{format_duration, format_timestamp};
 use crate::notifications::{NotificationChannelConfig, NotificationEvent};
 
@@ -37,11 +37,11 @@ impl NotificationChannelAdapter for FeishuChannel<'_> {
             .json(&body))
     }
 
-    fn response_error(&self, body: &str) -> Option<String> {
-        feishu_response_error(body)
+    fn validate_response(&self, body: &str) -> std::result::Result<(), String> {
+        validate_feishu_response(body)
     }
 
-    fn sanitize_transport_error(&self, error: &str) -> String {
+    fn sanitize_error(&self, error: &str) -> String {
         let url = self.config.url.trim();
         if url.is_empty() {
             return error.to_string();
@@ -140,21 +140,26 @@ fn feishu_markdown_value(value: &str, fallback: &str) -> String {
         .replace('>', "＞")
 }
 
-fn feishu_response_error(body: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(body).ok()?;
+fn validate_feishu_response(body: &str) -> std::result::Result<(), String> {
+    let value = serde_json::from_str::<Value>(body)
+        .map_err(|_| "飞书机器人返回了无法解析的响应".to_string())?;
     let code = value
         .get("code")
         .or_else(|| value.get("StatusCode"))
-        .and_then(Value::as_i64)?;
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "飞书机器人响应缺少状态码".to_string())?;
     if code == 0 {
-        return None;
+        return Ok(());
     }
     let message = value
         .get("msg")
         .or_else(|| value.get("StatusMessage"))
         .and_then(Value::as_str)
         .unwrap_or("未知错误");
-    Some(format!("飞书机器人返回错误 {code}：{message}"))
+    Err(format!(
+        "飞书机器人返回错误 {code}：{}",
+        bounded_remote_message(message)
+    ))
 }
 
 #[cfg(test)]
@@ -245,13 +250,15 @@ mod tests {
     }
 
     #[test]
-    fn response_checks_business_error_code() {
-        assert!(feishu_response_error(r#"{"code":0,"msg":"success"}"#).is_none());
+    fn response_requires_an_explicit_success_code() {
+        assert!(validate_feishu_response(r#"{"code":0,"msg":"success"}"#).is_ok());
         assert!(
-            feishu_response_error(r#"{"code":19021,"msg":"sign fail"}"#)
-                .unwrap()
+            validate_feishu_response(r#"{"code":19021,"msg":"sign fail"}"#)
+                .unwrap_err()
                 .contains("19021")
         );
+        assert!(validate_feishu_response("not json").is_err());
+        assert!(validate_feishu_response(r#"{"msg":"success"}"#).is_err());
     }
 
     #[test]
@@ -263,7 +270,7 @@ mod tests {
         };
         let channel = FeishuChannel::new(&config);
 
-        let error = channel.sanitize_transport_error(
+        let error = channel.sanitize_error(
             "request to https://open.feishu.cn/open-apis/bot/v2/hook/secret?sign=private failed",
         );
 

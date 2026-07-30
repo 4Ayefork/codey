@@ -98,7 +98,7 @@ Codey 将运行时 core/data crate 固定在 `vendor/CodeyRuntime`，生命周�
 
 ### 通知渠道扩展
 
-通知实现按“公共调度 + 渠道适配”拆分。后端 `backend/src/notifications/` 中的配置、事件、格式化和调度器不依赖具体渠道；每个发送渠道放在 `channels/` 的独立文件中，实现 `NotificationChannelAdapter`，并在 `channels/mod.rs` 注册。新增渠道时需要同时补齐渠道枚举与配置字段、请求构造、响应错误解析、传输错误脱敏及对应单元测试。
+通知实现按“公共调度 + 渠道适配”拆分。后端 `backend/src/notifications/` 中的配置、事件、格式化和调度器不依赖具体渠道；每个发送渠道放在 `channels/` 的独立文件中，实现 `NotificationChannelAdapter`，并在 `channels/mod.rs` 注册。新增渠道时需要同时补齐渠道枚举与配置字段、请求构造、明确的成功响应校验、传输与响应错误脱敏及对应单元测试；HTTP 成功但响应损坏或缺少渠道成功字段仍按发送失败处理。
 
 前端 `src/notifications/` 以 `channelRegistry.tsx` 为唯一渠道注册入口，每个渠道使用独立编辑器组件；注册项负责显示信息、默认配置和完整性判断，公共列表只负责增删、启停和测试交互。外部配置结构继续使用 `webhook.channels`，测试命令继续使用 `test_webhook`，以兼容既有渲染层调用和持久化数据。涉及凭据的渠道还必须保持返回渲染层前脱敏、留空保存时回填旧值、显式清除时不回填。
 
