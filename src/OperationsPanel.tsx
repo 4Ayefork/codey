@@ -125,33 +125,23 @@ function OperationsPanelComponent({
     tone?: "success" | "warning" | "destructive" | "info";
   };
 
-  // Session Recovery Metrics
-  const sessionDetailStr = maintenance?.sessionDetail || "";
-  const filesMatch = sessionDetailStr.match(/修复 (\d+) 个会话文件/);
-  const rowsMatch = sessionDetailStr.match(/更新 (\d+) 行数据库索引/);
-  const ghostMatch = sessionDetailStr.match(/清理 (\d+) 条幽灵任务/);
-
-  const filesCount = filesMatch ? filesMatch[1] : "0";
-  const rowsCount = rowsMatch ? rowsMatch[1] : "0";
-  const ghostCount = ghostMatch ? ghostMatch[1] : "0";
-
   const sessionMetrics: MetricItem[] = [
     {
       id: "session-files",
       icon: IconFileCheck,
-      tooltip: `会话文件：已修复 ${filesCount} 个会话文件`,
+      tooltip: `会话文件：已修复 ${maintenance?.sessionFilesFixed ?? 0} 个会话文件`,
       tone: sessionOk ? "success" : "warning",
     },
     {
       id: "session-db",
       icon: IconDatabase,
-      tooltip: `数据库索引：已更新 ${rowsCount} 行数据库索引`,
+      tooltip: `数据库索引：已更新 ${maintenance?.sqliteRowsUpdated ?? 0} 行数据库索引`,
       tone: sessionOk ? "success" : "warning",
     },
     {
       id: "session-ghost",
       icon: IconShieldCheck,
-      tooltip: `幽灵任务：已清理 ${ghostCount} 条幽灵任务`,
+      tooltip: `幽灵任务：已清理 ${maintenance?.ghostTasksPruned ?? 0} 条幽灵任务`,
       tone: sessionOk ? "success" : "warning",
     },
   ];

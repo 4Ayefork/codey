@@ -71,10 +71,22 @@ pub struct MaintenanceStatus {
     pub session_status: String,
     pub session_detail: String,
     pub session_threads: usize,
+    pub session_files_fixed: usize,
+    pub sqlite_rows_updated: usize,
+    pub ghost_tasks_pruned: usize,
     pub plugin_status: String,
     pub plugin_detail: String,
     pub performance_status: String,
     pub performance_detail: String,
+}
+
+struct SessionMaintenanceSummary {
+    status: String,
+    detail: String,
+    threads: usize,
+    files_fixed: usize,
+    sqlite_rows_updated: usize,
+    ghost_tasks_pruned: usize,
 }
 
 pub struct CodeyRuntime {
@@ -268,8 +280,7 @@ impl CodeyRuntime {
                 }),
             );
         }
-        let (session_status, session_detail, session_threads) =
-            session_maintenance_summary(&provider_sync, &index_cleanup);
+        let session_maintenance = session_maintenance_summary(&provider_sync, &index_cleanup);
         match initial_trace_guard.await {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
@@ -484,9 +495,12 @@ impl CodeyRuntime {
             }
         };
         let maintenance = MaintenanceStatus {
-            session_status,
-            session_detail,
-            session_threads,
+            session_status: session_maintenance.status,
+            session_detail: session_maintenance.detail,
+            session_threads: session_maintenance.threads,
+            session_files_fixed: session_maintenance.files_fixed,
+            sqlite_rows_updated: session_maintenance.sqlite_rows_updated,
+            ghost_tasks_pruned: session_maintenance.ghost_tasks_pruned,
             plugin_status,
             plugin_detail,
             performance_status: spawned.performance_status.clone(),
@@ -794,7 +808,7 @@ fn watchdog_should_reinject(consecutive_failures: &mut u8, healthy: bool) -> boo
 fn session_maintenance_summary(
     provider_sync: &ProviderSyncResult,
     index_cleanup: &Result<SessionIndexCleanupReport>,
-) -> (String, String, usize) {
+) -> SessionMaintenanceSummary {
     let mut errors = Vec::new();
     if provider_sync.status != ProviderSyncStatus::Synced {
         errors.push(provider_sync.message.clone());
@@ -812,8 +826,6 @@ fn session_maintenance_summary(
             0
         }
     };
-    let session_threads = provider_sync.changed_session_files;
-
     let mut detail = format!(
         "已同步到 {}：修复 {} 个会话文件，更新 {} 行数据库索引，清理 {} 条幽灵任务",
         provider_sync.target_provider,
@@ -829,7 +841,68 @@ fn session_maintenance_summary(
         detail.push_str(&errors.join("；"));
     }
     let status = if errors.is_empty() { "ready" } else { "error" };
-    (status.to_string(), detail, session_threads)
+    SessionMaintenanceSummary {
+        status: status.to_string(),
+        detail,
+        threads: provider_sync.changed_session_files,
+        files_fixed: provider_sync.changed_session_files,
+        sqlite_rows_updated: provider_sync.sqlite_rows_updated,
+        ghost_tasks_pruned: pruned_entries,
+    }
+}
+
+#[cfg(test)]
+mod maintenance_status_tests {
+    use super::*;
+
+    #[test]
+    fn maintenance_status_exposes_structured_session_metrics() {
+        let provider_sync = ProviderSyncResult {
+            status: ProviderSyncStatus::Synced,
+            message: "ok".to_string(),
+            target_provider: "openai".to_string(),
+            backup_dir: None,
+            changed_session_files: 3,
+            skipped_locked_rollout_files: Vec::new(),
+            sqlite_rows_updated: 7,
+            sqlite_provider_rows_updated: 2,
+            sqlite_user_event_rows_updated: 3,
+            sqlite_cwd_rows_updated: 2,
+            updated_workspace_roots: 1,
+            encrypted_content_warning: None,
+        };
+        let cleanup = Ok(SessionIndexCleanupReport {
+            scanned_entries: 5,
+            live_threads: 3,
+            pruned_entries: 2,
+            backup_dir: None,
+        });
+
+        let summary = session_maintenance_summary(&provider_sync, &cleanup);
+        let status = MaintenanceStatus {
+            session_status: summary.status,
+            session_detail: summary.detail,
+            session_threads: summary.threads,
+            session_files_fixed: summary.files_fixed,
+            sqlite_rows_updated: summary.sqlite_rows_updated,
+            ghost_tasks_pruned: summary.ghost_tasks_pruned,
+            plugin_status: "ready".to_string(),
+            plugin_detail: String::new(),
+            performance_status: "ready".to_string(),
+            performance_detail: String::new(),
+        };
+        let value = serde_json::to_value(status).unwrap();
+
+        assert_eq!(value["sessionFilesFixed"], 3);
+        assert_eq!(value["sqliteRowsUpdated"], 7);
+        assert_eq!(value["ghostTasksPruned"], 2);
+        assert!(
+            value["sessionDetail"]
+                .as_str()
+                .unwrap()
+                .contains("修复 3 个")
+        );
+    }
 }
 
 pub fn restore_previous_runtime_state(home: &std::path::Path) -> Result<()> {

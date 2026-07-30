@@ -61,6 +61,9 @@ export type Maintenance = {
   sessionStatus?: string;
   sessionDetail?: string;
   sessionThreads?: number;
+  sessionFilesFixed?: number;
+  sqliteRowsUpdated?: number;
+  ghostTasksPruned?: number;
   pluginStatus?: string;
   pluginDetail?: string;
   performanceStatus?: string;
