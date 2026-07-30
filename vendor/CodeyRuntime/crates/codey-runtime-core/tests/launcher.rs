@@ -338,6 +338,34 @@ fn app_paths_normalizes_executable_and_package_paths() {
 }
 
 #[test]
+fn app_paths_normalizes_custom_install_roots_on_other_drives() {
+    let temp = tempfile::tempdir().unwrap();
+    let custom_root = temp.path().join("D drive").join("OpenAI Codex");
+    let current = custom_root.join("versions").join("current");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(current.join("ChatGPT.exe"), "").unwrap();
+
+    assert_eq!(
+        normalize_codex_app_path(&custom_root).as_deref(),
+        Some(current.as_path())
+    );
+}
+
+#[test]
+fn app_paths_normalizes_custom_install_bin_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let custom_root = temp.path().join("D drive").join("Codex Custom");
+    let bin = custom_root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("Codex.exe"), "").unwrap();
+
+    assert_eq!(
+        normalize_codex_app_path(&custom_root).as_deref(),
+        Some(bin.as_path())
+    );
+}
+
+#[test]
 fn app_paths_prefers_chatgpt_entrypoint_when_portable_bundle_contains_codex_shim() {
     let temp = tempfile::tempdir().unwrap();
     let app = temp.path().join("current");
@@ -392,7 +420,7 @@ fn app_paths_saved_path_is_used_when_no_explicit_path_is_provided() {
 
 #[test]
 fn launcher_builds_debug_arguments_and_commands() {
-    let app_dir = PathBuf::from(r"C:\Codex\app");
+    let app_dir = PathBuf::from(r"D:\Apps With Spaces\OpenAI Codex\app");
 
     assert_eq!(
         build_codex_arguments(9229, &[]),
@@ -402,6 +430,7 @@ fn launcher_builds_debug_arguments_and_commands() {
         ]
     );
     let command = build_codex_command(&app_dir, 9229, &[]);
+    assert_eq!(PathBuf::from(&command[0]), build_codex_executable(&app_dir));
     assert_eq!(command[1], "--remote-debugging-port=9229");
     assert_eq!(command[2], "--remote-allow-origins=http://127.0.0.1:9229");
 }

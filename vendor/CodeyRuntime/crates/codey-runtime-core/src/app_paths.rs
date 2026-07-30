@@ -234,10 +234,14 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
         return Some(path.to_path_buf());
     }
 
-    let nested_app = path.join("app");
-    if nested_app.is_dir() {
-        if executable_in_dir(&nested_app).is_some() {
-            return Some(nested_app);
+    for nested in [
+        path.join("app"),
+        path.join("bin"),
+        path.join("current"),
+        path.join("versions").join("current"),
+    ] {
+        if executable_in_dir(&nested).is_some() {
+            return Some(nested);
         }
     }
 

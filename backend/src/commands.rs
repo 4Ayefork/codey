@@ -7,6 +7,8 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use codey_runtime_core::app_paths::resolve_codex_app_dir_with_saved;
 use codey_runtime_core::app_paths::{build_codex_executable, normalize_codex_app_path};
 use futures_util::StreamExt;
 use reqwest::header::USER_AGENT;
@@ -22,6 +24,8 @@ use crate::cdp;
 use crate::codex_config::codex_home;
 use crate::config::{CodeyConfig, ConfigStore};
 use crate::error_log;
+#[cfg(windows)]
+use crate::launcher::{CODEX_APP_NOT_FOUND_ERROR, CODEX_APP_PATH_INVALID_ERROR};
 use crate::launcher::{CodeyRuntime, restore_previous_runtime_state, restore_runtime_config};
 use crate::message_delete::delete_messages;
 use crate::model_catalog;
@@ -824,13 +828,7 @@ pub async fn load_codey_config(state: &Arc<AppState>) -> Result<Value, String> {
 async fn pick_codex_app_directory() -> Result<Value, String> {
     #[cfg(windows)]
     {
-        let selected = tokio::task::spawn_blocking(|| {
-            rfd::FileDialog::new()
-                .set_title("选择 Codex 桌面应用所在目录")
-                .pick_folder()
-        })
-        .await
-        .map_err(|error| format!("打开 Codex 目录选择器失败：{error}"))?;
+        let selected = select_codex_app_directory().await?;
 
         Ok(match selected {
             Some(path) => json!({
@@ -845,6 +843,17 @@ async fn pick_codex_app_directory() -> Result<Value, String> {
     {
         Err("Codex 应用目录选择仅在 Windows 上提供".to_string())
     }
+}
+
+#[cfg(windows)]
+async fn select_codex_app_directory() -> Result<Option<PathBuf>, String> {
+    tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("选择 Codex 桌面应用安装目录（支持任意磁盘）")
+            .pick_folder()
+    })
+    .await
+    .map_err(|error| format!("打开 Codex 目录选择器失败：{error}"))
 }
 
 fn validate_codex_app_path(path: &str) -> Result<PathBuf, String> {
@@ -864,6 +873,39 @@ fn validate_codex_app_path(path: &str) -> Result<PathBuf, String> {
         ));
     }
     Ok(app_dir)
+}
+
+#[cfg(windows)]
+async fn ensure_windows_codex_app_path(state: &Arc<AppState>) -> Result<(), String> {
+    let configured_app_path = state.config.read().await.codex_app_path.trim().to_string();
+    let configured_path =
+        (!configured_app_path.is_empty()).then(|| PathBuf::from(configured_app_path.as_str()));
+    let resolved = tokio::task::spawn_blocking(move || {
+        resolve_codex_app_dir_with_saved(configured_path.as_deref(), None)
+    })
+    .await
+    .map_err(|error| format!("检测 Codex 桌面应用目录的任务异常退出：{error}"))?;
+    if resolved.is_some() {
+        return Ok(());
+    }
+
+    let Some(selected) = select_codex_app_directory().await? else {
+        let error = if configured_app_path.is_empty() {
+            CODEX_APP_NOT_FOUND_ERROR
+        } else {
+            CODEX_APP_PATH_INVALID_ERROR
+        };
+        return Err(format!("{error}；已取消选择安装目录"));
+    };
+    let app_dir = validate_codex_app_path(&selected.to_string_lossy())?;
+    let mut config = state.config.read().await.clone();
+    config.codex_app_path = app_dir.to_string_lossy().to_string();
+    state
+        .store
+        .save(&config)
+        .map_err(|error| format!("保存 Codex 桌面应用目录失败：{error}"))?;
+    *state.config.write().await = config;
+    Ok(())
 }
 
 async fn set_codex_app_path(state: &Arc<AppState>, path: String) -> Result<Value, String> {
@@ -1465,6 +1507,8 @@ async fn launch_codey_inner_locked(state: &Arc<AppState>) -> Result<Value, Strin
     if state.runtime.lock().await.is_some() {
         return Ok(json!({"status":"already_running"}));
     }
+    #[cfg(windows)]
+    ensure_windows_codex_app_path(state).await?;
     stop_waiting_webhook_watcher(state).await;
     restore_previous_runtime_state(&codex_home())
         .map_err(|error| format!("恢复上次 Codey 临时 Codex 配置失败：{error}"))?;
@@ -2920,6 +2964,20 @@ mod tests {
         assert_eq!(
             validate_codex_app_path(directory.path().to_str().unwrap()).unwrap(),
             directory.path()
+        );
+    }
+
+    #[test]
+    fn selected_codex_app_path_accepts_a_custom_install_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_root = directory.path().join("D drive").join("OpenAI Codex");
+        let current = install_root.join("versions").join("current");
+        fs::create_dir_all(&current).unwrap();
+        fs::write(current.join("ChatGPT.exe"), []).unwrap();
+
+        assert_eq!(
+            validate_codex_app_path(install_root.to_str().unwrap()).unwrap(),
+            current
         );
     }
 

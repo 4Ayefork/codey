@@ -93,12 +93,12 @@ Codey 将运行时 core/data crate 固定在 `vendor/CodeyRuntime`，生命周�
 - Codex 慢启动保护：`fastCodexStartup` 默认为 `true`。Codey 会在 Electron 主进程仍处于启动暂停阶段时，为登录后的 Statsig bootstrap 设置 1.5 秒上限，并保留 renderer 保护作为兼容兜底；正常响应保持原流程，慢请求或失败请求会让 Codex 使用自身错误降级路径继续挂载主界面。原始初始化仍可在后续刷新中恢复；关闭后下次启动完全使用 Codex 原生等待策略。
 - FastCtx 上下文工具：`fastContextTools` 默认为 `false`。打开后下次启动 Codex 生效；Codey 仅在本次运行的临时 `config.toml` 中注册独立的 `codey_fastctx` MCP、设置 8500 token 输出预算并追加工具使用指引，退出时随 provider 配置一起恢复原文件。用户已有的 `mcp_servers.fastctx` 不会被覆盖。
 - 子代理协作优化：`subagentOptimization` 默认为 `false`。开启前会校验当前线路是否支持子代理固定使用的 `gpt-5.6-luna`；第三方线路会实时刷新上游模型列表，不支持或无法确认时保持关闭并提示。打开后下次启动 Codex 生效；`config.toml`、`AGENTS.md` 与 `agents/default.toml` 的变更纳入同一个运行时租约，退出时自动恢复。`config.toml` 使用三方合并回滚 Codey 拥有的字段，提示词只移除 Codey 注入的完整块，用户运行期间替换过的 `default.toml` 不会被覆盖。
-- Codex App 路径：可在 Codey 配置界面填写；留空时使用 CodeyRuntime 的平台发现逻辑。
+- Codex App 路径：可在 Codey 配置界面填写；留空时使用 CodeyRuntime 的平台发现逻辑。Windows 自动发现失败或已保存路径失效时，会在启动阶段打开原生目录选择器并持久化规范化后的应用目录，因此自定义盘符不依赖尚未启动的 Codex 页面；目录解析兼容安装根目录下的 `app`、`bin`、`current` 与 `versions/current` 布局。
 - CDP 默认端口：`9229`，如 Windows 端口被占用会按 core 的逻辑选择可用回环端口。
 
 ## 启动与恢复
 
-打开 Codey 后不会创建原生配置窗口；Codey 会先迁移非法的内置 provider 覆盖、永久同步 rollout 与 SQLite、清理幽灵任务索引，再备份并临时应用当前 provider、修复插件市场、启动 Codex，最后通过 CDP 注入轻量控制脚本。Windows 上必须先从系统托盘完全退出已有 Codex，自动性能补丁才能在新主进程执行前安装；macOS 上启用宠物硬阉割时也必须先完全退出已有 Codex。首次点击 Codex header 中的 “Codey” 按钮时才会加载紧凑 React 浮层，配置操作通过本次 CDP bridge 发送给 Rust 进程。遮罩空白处、右上角关闭按钮和 `Esc` 都能关闭浮层。关闭这次由 Codey 拉起的 Codex 后，Codey 会终止该 Codex 的主进程、Helper、app-server 及后代进程树，恢复临时配置，再清理其他遗留 Codey 进程并自行退出；收到系统退出信号和安装更新时也执行同一套清理。会话 JSONL、数据库与索引清理结果不回滚。若 CDP 注入失败，Codey 会停止本次启动并输出错误，不会另起本地 Web 服务。
+打开 Codey 后不会创建常驻原生配置窗口；仅当 Windows 无法解析 Codex 应用路径时，启动阶段会显示一次系统目录选择器。Codey 会先迁移非法的内置 provider 覆盖、永久同步 rollout 与 SQLite、清理幽灵任务索引，再备份并临时应用当前 provider、修复插件市场、启动 Codex，最后通过 CDP 注入轻量控制脚本。Windows 上必须先从系统托盘完全退出已有 Codex，自动性能补丁才能在新主进程执行前安装；macOS 上启用宠物硬阉割时也必须先完全退出已有 Codex。首次点击 Codex header 中的 “Codey” 按钮时才会加载紧凑 React 浮层，配置操作通过本次 CDP bridge 发送给 Rust 进程。遮罩空白处、右上角关闭按钮和 `Esc` 都能关闭浮层。关闭这次由 Codey 拉起的 Codex 后，Codey 会终止该 Codex 的主进程、Helper、app-server 及后代进程树，恢复临时配置，再清理其他遗留 Codey 进程并自行退出；收到系统退出信号和安装更新时也执行同一套清理。会话 JSONL、数据库与索引清理结果不回滚。若 CDP 注入失败，Codey 会停止本次启动并输出错误，不会另起本地 Web 服务。
 
 Codey 不改写 `auth.json`，因此 Codex 的账号栏仍会显示原来的官方登录账号；这只代表客户端登录会话，不代表第三方 provider 仍走官方接口。运行期间全局 provider ID 保持不变，但第三方 API 地址、协议和 bearer token 会直接写入该 provider 的临时配置。
 
