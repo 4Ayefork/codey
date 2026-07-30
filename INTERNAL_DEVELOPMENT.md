@@ -32,7 +32,7 @@ Codey 是一个无界面的 Rust 桌面辅助进程，通过 CDP 连接官方 Co
 - 会话与插件修复在每次启动 Codex 前自动执行；所有 rollout JSONL 的 `session_meta.payload.model_provider` 与全部 Codex SQLite 中的 `threads.model_provider` 会永久归一到非保留全局 ID `codey_global`（已有自定义 provider 时沿用原 ID），同时补齐 `has_user_event`、`cwd` 和工作区路径。Codey 不在退出时回滚这些改动，修复后直接启动原版 Codex 仍能看到历史会话。
 - 启动官方 Codex 前会清理 `session_index.jsonl` 中既不存在于 rollout、也没有任何 SQLite 引用的精确格式幽灵任务。索引缺失或没有可清理条目时直接跳过，不再为此遍历全部 rollout 并对每个 Codex 数据库做全表扫描。写入前保存原始索引并做快照一致性校验，备份位于 `~/.codex/backups_state/provider-sync`，保留最近 5 份 Codey 索引清理备份。
 - 新版 Codex 的消息选择按 `data-turn-key` 选择整轮对话，删除前备份 rollout JSONL 并原子替换；旧版 SQLite 消息表继续兼容。
-- 每条侧边栏会话提供数据导出按钮，生成带 `Codey会话-` 文件名前缀的可移植 `.codey-session.json`；导出时直接流式转义 JSONL 内容，不再为每行分配第二份转义字符串，并在序列化过程中强制执行 512 MB 传输上限，临时文件不会先膨胀到上限之外。本地项目目录提供导入按钮，可恢复完整 rollout 并将会话挂到目标项目。重复 ID 会自动导入为副本，不覆盖已有会话。
+- 每条侧边栏会话提供数据导出按钮，生成带 `Codey会话-` 文件名前缀的可移植 `.codey-session.json`；导出时直接流式转义 JSONL 内容，不再为每行分配第二份转义字符串，并在序列化过程中强制执行 512 MB 传输上限，临时文件不会先膨胀到上限之外。会话列表标题栏兼容 Codex 的 `Tasks` 与 `Recents` 两代分区名称并提供全局导入入口，本地项目目录也提供导入按钮，可恢复完整 rollout 并将会话挂到目标项目。重复 ID 会自动导入为副本，不覆盖已有会话。
 - 配置面板提供“恢复备份”，默认恢复最近一次会话数据库备份，也可通过 `restore_session_backup` 命令传入备份目录。
 - 官方 curated、embedded remote 和本地工具插件市场通过 CodeyRuntime core 的兼容逻辑注册，页面层合并本地插件并清理隐藏/远程路径字段。
 - 配置面板可保存用户脚本；脚本作为独立 CDP 文档脚本在内置修复脚本之后执行。

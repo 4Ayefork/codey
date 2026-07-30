@@ -142,7 +142,12 @@ class FakeElement {
   }
 }
 
-function loadInjection({ bridge, dispatcher } = {}) {
+function loadInjection({
+  bridge,
+  dispatcher,
+  tasksSectionHeading = "Tasks",
+  tasksSectionLabel = "",
+} = {}) {
   const body = new FakeElement("body");
   const documentElement = new FakeElement("html");
   const thread = new FakeElement("div", {
@@ -166,7 +171,7 @@ function loadInjection({ bridge, dispatcher } = {}) {
   });
   const tasksSection = new FakeElement("section", {
     "data-app-action-sidebar-section": "",
-    "data-app-action-sidebar-section-heading": "Tasks",
+    "data-app-action-sidebar-section-heading": tasksSectionHeading,
   });
   const tasksTitleRow = new FakeElement("div");
   const tasksTitleLabel = new FakeElement("div");
@@ -174,6 +179,7 @@ function loadInjection({ bridge, dispatcher } = {}) {
   const tasksToggle = new FakeElement("button", {
     "data-app-action-sidebar-section-toggle": "",
   });
+  tasksToggle.textContent = tasksSectionLabel;
   const tasksActionBar = new FakeElement("div");
   const tasksOptionsButton = new FakeElement("button", {
     "aria-label": "任务侧边栏选项",
@@ -315,6 +321,22 @@ function loadInjection({ bridge, dispatcher } = {}) {
     window,
   };
 }
+
+test("adds the session import action to the Recents sidebar section", () => {
+  const runtime = loadInjection({
+    tasksSectionHeading: "Recents",
+    tasksSectionLabel: "最近",
+  });
+  const importButton = runtime.tasksSection.querySelector("[data-codey-tasks-import]");
+
+  assert.ok(importButton);
+  assert.equal(importButton.getAttribute("aria-label"), "导入会话数据");
+  assert.deepEqual(runtime.tasksActionBar.children, [
+    runtime.tasksOptionsButton,
+    importButton,
+    runtime.newTaskButton,
+  ]);
+});
 
 test("matches native sidebar actions and deletes after popover confirmation", async () => {
   const events = [];

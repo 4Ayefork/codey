@@ -75,6 +75,7 @@
     "[data-app-action-sidebar-project-row]",
   ].join(", ");
   const sidebarThreadRowSelector = "[data-app-action-sidebar-thread-row]";
+  const taskListSectionHeadings = new Set(["task", "tasks", "recent", "recents", "任务", "最近"]);
   const deletedSidebarSessionTtlMs = 10 * 60 * 1000;
   const fallbackSessionExportMaxBytes = 64 * 1024 * 1024;
   const queryWithin = (root, selector) => {
@@ -517,7 +518,7 @@
       ).trim().toLowerCase();
       const sectionToggle = section.querySelector("[data-app-action-sidebar-section-toggle]");
       const localizedHeading = String(sectionToggle?.textContent || "").trim().toLowerCase();
-      if (heading !== "tasks" && localizedHeading !== "任务" && localizedHeading !== "tasks") return;
+      if (!taskListSectionHeadings.has(heading) && !taskListSectionHeadings.has(localizedHeading)) return;
       const titleRow = sectionToggle?.parentElement?.parentElement?.parentElement;
       if (!(titleRow instanceof HTMLElement)) return;
       const headerControls = [...titleRow.querySelectorAll("button, [role=button]")]
