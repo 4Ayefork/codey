@@ -57,36 +57,56 @@ pub async fn sync_official_experimental_features(state: &Arc<AppState>) -> Resul
 }
 
 pub async fn sync_cc_switch_state(state: &Arc<AppState>) -> cc_switch::CcSwitchStatus {
-    let _config_write_guard = state.config_write_lock.lock().await;
+    let home = codex_home();
+    sync_cc_switch_state_with(state, move |config| {
+        cc_switch::sync_current_provider(&config, &home).map_err(|error| error.to_string())
+    })
+    .await
+}
+
+pub(super) async fn sync_cc_switch_state_with<F>(
+    state: &Arc<AppState>,
+    sync: F,
+) -> cc_switch::CcSwitchStatus
+where
+    F: FnOnce(CodeyConfig) -> Result<(CodeyConfig, cc_switch::CcSwitchStatus), String>
+        + Send
+        + 'static,
+{
     let previous = state.config.read().await.clone();
     let sync_input = previous.clone();
-    let home = codex_home();
-    let store = state.store.clone();
-    let sync_result = tokio::task::spawn_blocking(move || {
-        let (config, status) = cc_switch::sync_current_provider(&sync_input, &home)
-            .map_err(|error| error.to_string())?;
-        if status.changed {
-            store
-                .save(&config)
-                .map_err(|error| format!("保存当前线路同步结果失败：{error}"))?;
-        }
-        Ok::<_, String>((config, status))
-    })
-    .await;
+    let sync_result = tokio::task::spawn_blocking(move || sync(sync_input)).await;
     match sync_result {
         Ok(Ok((config, status))) => {
-            if status.changed {
-                *state.config.write().await = config;
+            if !status.changed {
+                return status;
             }
+
+            let _config_write_guard = state.config_write_lock.lock().await;
+            let latest = state.config.read().await.clone();
+            if latest != previous {
+                let mut current = cc_switch::status_from_config(&latest);
+                current.message =
+                    Some("Codey 设置在同步线路期间已更新，已忽略过期的同步结果".to_string());
+                return current;
+            }
+            if let Err(error) = state.store.save(&config) {
+                let mut current = cc_switch::status_from_config(&latest);
+                current.message = Some(format!("保存当前线路同步结果失败：{error}"));
+                return current;
+            }
+            *state.config.write().await = config;
             status
         }
         Ok(Err(error)) => {
-            let mut status = cc_switch::status_from_config(&previous);
+            let current = state.config.read().await.clone();
+            let mut status = cc_switch::status_from_config(&current);
             status.message = Some(error);
             status
         }
         Err(error) => {
-            let mut status = cc_switch::status_from_config(&previous);
+            let current = state.config.read().await.clone();
+            let mut status = cc_switch::status_from_config(&current);
             status.message = Some(format!("同步当前线路任务异常退出：{error}"));
             status
         }
@@ -209,6 +229,7 @@ pub async fn fetch_current_provider_models(state: &Arc<AppState>) -> Result<Valu
     }
     state.store.save(&next).map_err(|error| error.to_string())?;
     *state.config.write().await = next.clone();
+    drop(_config_write_guard);
     let restart_required = runtime_config_requires_restart(state, &next).await;
     Ok(json!({
         "status":"ok",
@@ -267,6 +288,7 @@ pub async fn save_selected_models(
     *state.config.write().await = config.clone();
     let model_state = current_model_state(&config)?;
     let public_config = redacted_config(&config);
+    drop(_config_write_guard);
     let restart_required = runtime_config_requires_restart(state, &config).await;
     Ok(json!({
         "status":"ok",
@@ -306,7 +328,6 @@ pub async fn save_default_model(
         .default_model_by_provider
         .insert(provider_id, requested_model.to_string());
     config = config.normalize();
-    let restart_required = runtime_config_requires_restart(state, &config).await;
     state
         .store
         .save(&config)
@@ -314,6 +335,8 @@ pub async fn save_default_model(
     *state.config.write().await = config.clone();
     let model_state = current_model_state(&config)?;
     let public_config = redacted_config(&config);
+    drop(_config_write_guard);
+    let restart_required = runtime_config_requires_restart(state, &config).await;
     Ok(json!({
         "status":"ok",
         "config":public_config,

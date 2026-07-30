@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, Notify, RwLock, oneshot, watch};
 #[cfg(test)]
 use models::{
     config_with_current_provider_models, renderer_model_catalog_value,
-    should_refresh_model_catalog, startup_model_sync_models_or_default,
+    should_refresh_model_catalog, startup_model_sync_models_or_default, sync_cc_switch_state_with,
 };
 use models::{
     current_model_state, current_renderer_model_catalog, sync_provider_models_for_launch,
@@ -1266,6 +1266,56 @@ mod tests {
         assert_eq!(disk, memory);
         assert_eq!(memory.settings_revision, 1);
         assert_eq!(memory.user_scripts.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_sync_does_not_block_config_writes_or_commit_a_stale_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let initial = CodeyConfig::default();
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            config: RwLock::new(initial.clone()),
+            ..AppState::default()
+        });
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let sync_state = Arc::clone(&state);
+        let sync_task = tokio::spawn(async move {
+            sync_cc_switch_state_with(&sync_state, move |mut config| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                config.profiles[0].name = "stale provider".to_string();
+                let mut status = cc_switch::status_from_config(&config);
+                status.changed = true;
+                Ok((config, status))
+            })
+            .await
+        });
+        started_rx.await.unwrap();
+
+        let mut settings = initial;
+        settings.slim_codex_pet = !settings.slim_codex_pet;
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            save_codey_config(&state, settings),
+        )
+        .await
+        .expect("provider inspection must not hold the config write lock")
+        .unwrap();
+        release_tx.send(()).unwrap();
+
+        let status = sync_task.await.unwrap();
+        assert!(
+            status
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("已忽略过期"))
+        );
+        let memory = state.config.read().await.clone();
+        let disk = state.store.load().unwrap();
+        assert_eq!(disk, memory);
+        assert_ne!(memory.profiles[0].name, "stale provider");
+        assert_eq!(memory.settings_revision, 1);
     }
 
     #[test]
