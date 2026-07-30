@@ -8,7 +8,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use crate::notifications::{NotificationChannelKind, WebhookConfig};
+pub use crate::notifications::WebhookConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -310,8 +310,6 @@ pub fn default_true() -> bool {
     true
 }
 
-pub const DEFAULT_UPDATE_MANIFEST_URL: &str = "";
-
 pub fn default_update_manifest_url() -> String {
     let base_url = option_env!("CODEY_UPDATE_BASE_URL")
         .unwrap_or_default()
@@ -468,7 +466,10 @@ mod tests {
         assert_eq!(config.webhook.channels.len(), 1);
         let channel = &config.webhook.channels[0];
         assert_eq!(channel.id, "legacy-feishu");
-        assert_eq!(channel.kind, NotificationChannelKind::Feishu);
+        assert_eq!(
+            channel.kind,
+            crate::notifications::NotificationChannelKind::Feishu
+        );
         assert!(channel.enabled);
         assert_eq!(channel.url, "https://open.feishu.cn/example");
         assert!(serialized["webhook"].get("enabled").is_none());
@@ -496,7 +497,6 @@ mod tests {
 
         assert_eq!(config.update_manifest_url, default_update_manifest_url());
         assert!(serialized.get("updateManifestUrl").is_none());
-        assert!(DEFAULT_UPDATE_MANIFEST_URL.is_empty());
     }
 
     #[test]

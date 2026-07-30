@@ -341,40 +341,6 @@ fn install_openai_plugins_zip(home: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     result
 }
 
-fn install_openai_curated_remote_marketplace_zip(home: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let destination = home.join(".tmp").join("plugins-remote");
-    let staging_parent = home.join(".tmp");
-    std::fs::create_dir_all(&staging_parent)
-        .with_context(|| format!("failed to create {}", staging_parent.display()))?;
-    let staging = staging_parent.join(format!(
-        "plugins-remote-embedded-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-    ));
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .with_context(|| format!("failed to remove stale {}", staging.display()))?;
-    }
-    std::fs::create_dir_all(&staging)
-        .with_context(|| format!("failed to create {}", staging.display()))?;
-
-    let result = extract_zip_exact(bytes, &staging)
-        .and_then(|_| validate_openai_curated_remote_marketplace_root(&staging))
-        .and_then(|_| {
-            replace_directory_with_backup_name(
-                &staging,
-                &destination,
-                "plugins-remote.previous-codey",
-            )
-        });
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    result
-}
-
 fn extract_openai_plugins_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<()> {
     let cursor = Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor).context("failed to read openai/plugins zip")?;
@@ -404,49 +370,6 @@ fn extract_openai_plugins_zip(bytes: &[u8], destination: &Path) -> anyhow::Resul
     Ok(())
 }
 
-fn extract_zip_exact(bytes: &[u8], destination: &Path) -> anyhow::Result<()> {
-    let cursor = Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).context("failed to read embedded plugin zip")?;
-    for index in 0..archive.len() {
-        let mut file = archive
-            .by_index(index)
-            .with_context(|| format!("failed to read zip entry {index}"))?;
-        let relative_path = safe_zip_path(file.name())?;
-        let output_path = destination.join(relative_path);
-        if file.is_dir() {
-            std::fs::create_dir_all(&output_path)
-                .with_context(|| format!("failed to create {}", output_path.display()))?;
-            continue;
-        }
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)
-            .with_context(|| format!("failed to read zip entry {}", file.name()))?;
-        std::fs::write(&output_path, contents)
-            .with_context(|| format!("failed to write {}", output_path.display()))?;
-    }
-    Ok(())
-}
-
-fn safe_zip_path(name: &str) -> anyhow::Result<PathBuf> {
-    let path = Path::new(name);
-    let mut relative = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(value) => relative.push(value),
-            Component::CurDir => {}
-            _ => anyhow::bail!("zip entry escapes destination: {name}"),
-        }
-    }
-    if relative.as_os_str().is_empty() {
-        anyhow::bail!("zip entry has empty path");
-    }
-    Ok(relative)
-}
-
 fn zip_entry_relative_path(name: &str) -> Option<PathBuf> {
     let path = Path::new(name);
     let mut components = path.components();
@@ -474,15 +397,6 @@ fn validate_openai_plugins_marketplace_root(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_openai_curated_remote_marketplace_root(root: &Path) -> anyhow::Result<()> {
-    let marketplace = local_openai_curated_remote_marketplace_root_from_root(root)?
-        .ok_or_else(|| anyhow::anyhow!("embedded official remote plugin marketplace is invalid"))?;
-    if marketplace != root {
-        anyhow::bail!("embedded official remote plugin marketplace root mismatch");
-    }
-    Ok(())
-}
-
 fn local_openai_curated_marketplace_root_from_root(root: &Path) -> anyhow::Result<Option<PathBuf>> {
     let marketplace_path = root
         .join(".agents")
@@ -497,36 +411,6 @@ fn local_openai_curated_marketplace_root_from_root(root: &Path) -> anyhow::Resul
         .with_context(|| format!("failed to parse {}", marketplace_path.display()))?;
     if marketplace.get("name").and_then(serde_json::Value::as_str)
         != Some(OPENAI_CURATED_MARKETPLACE)
-    {
-        return Ok(None);
-    }
-    let has_plugins = marketplace
-        .get("plugins")
-        .and_then(serde_json::Value::as_array)
-        .map(|plugins| !plugins.is_empty())
-        .unwrap_or(false);
-    if !has_plugins || !root.join("plugins").is_dir() {
-        return Ok(None);
-    }
-    Ok(Some(root.to_path_buf()))
-}
-
-fn local_openai_curated_remote_marketplace_root_from_root(
-    root: &Path,
-) -> anyhow::Result<Option<PathBuf>> {
-    let marketplace_path = root
-        .join(".agents")
-        .join("plugins")
-        .join("marketplace.json");
-    if !marketplace_path.is_file() {
-        return Ok(None);
-    }
-    let text = std::fs::read_to_string(&marketplace_path)
-        .with_context(|| format!("failed to read {}", marketplace_path.display()))?;
-    let marketplace: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse {}", marketplace_path.display()))?;
-    if marketplace.get("name").and_then(serde_json::Value::as_str)
-        != Some(OPENAI_CURATED_REMOTE_MARKETPLACE)
     {
         return Ok(None);
     }
