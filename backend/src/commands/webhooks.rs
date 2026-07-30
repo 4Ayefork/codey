@@ -715,12 +715,30 @@ async fn terminal_notification_was_sent(
     keys.iter().any(|key| notifications.is_known(key))
 }
 
+#[derive(Debug)]
+struct WebhookDispatchError {
+    detail: String,
+    uncertain: bool,
+}
+
+impl WebhookDispatchError {
+    fn is_uncertain(&self) -> bool {
+        self.uncertain
+    }
+}
+
+impl std::fmt::Display for WebhookDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
 async fn dispatch_webhook_channels(
     state: &Arc<AppState>,
     channels: Vec<NotificationChannelConfig>,
     event: &NotificationEvent,
     notification_key: &str,
-) -> Result<(), String> {
+) -> Result<(), WebhookDispatchError> {
     let configured_channels = channels
         .into_iter()
         .filter(|channel| channel.enabled && channel.is_configured())
@@ -741,31 +759,35 @@ async fn dispatch_webhook_channels(
         let event = event.clone();
         async move {
             let dispatcher = NotificationDispatcher::with_client(client, channel);
-            (
-                delivery_key,
-                dispatcher
-                    .send(&event)
-                    .await
-                    .map_err(|error| error.to_string()),
-            )
+            (delivery_key, dispatcher.send(&event).await)
         }
     });
     let results = join_all(deliveries).await;
     let mut errors = Vec::new();
+    let mut uncertain = false;
     let mut notifications = state.webhook_notifications.lock().await;
     for (delivery_key, result) in results {
         match result {
             Ok(()) => {
                 notifications.remember_settled(delivery_key);
             }
-            Err(error) => errors.push(error),
+            Err(error) => {
+                if error.is_uncertain() {
+                    uncertain = true;
+                    notifications.remember_settled(delivery_key);
+                }
+                errors.push(error.to_string());
+            }
         }
     }
     drop(notifications);
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!("部分通知渠道发送失败：{}", errors.join("；")))
+        Err(WebhookDispatchError {
+            detail: format!("部分通知渠道发送失败：{}", errors.join("；")),
+            uncertain,
+        })
     }
 }
 
@@ -808,12 +830,13 @@ async fn dispatch_settled_webhook_failure(
     .with_session_name(session_name)
     .with_reasoning_effort(reasoning_effort);
     if let Err(error) = dispatch_webhook_channels(state, channels, &event, &failed_key).await {
-        state
-            .webhook_notifications
-            .lock()
-            .await
-            .abandon(&failed_key);
-        return Err(error);
+        let mut notifications = state.webhook_notifications.lock().await;
+        if error.is_uncertain() {
+            notifications.settle(failed_key);
+        } else {
+            notifications.abandon(&failed_key);
+        }
+        return Err(error.to_string());
     }
     state.webhook_notifications.lock().await.settle(failed_key);
     Ok(json!({"status":"ok","eventId":event.event_id}))
@@ -925,12 +948,13 @@ pub(super) async fn notify_webhook_completion(
     .with_reasoning_effort(reasoning_effort);
     if let Err(error) = dispatch_webhook_channels(state, channels, &event, &notification_key).await
     {
-        state
-            .webhook_notifications
-            .lock()
-            .await
-            .abandon(&notification_key);
-        return Err(error);
+        let mut notifications = state.webhook_notifications.lock().await;
+        if error.is_uncertain() {
+            notifications.settle(notification_key);
+        } else {
+            notifications.abandon(&notification_key);
+        }
+        return Err(error.to_string());
     }
     state
         .webhook_notifications
@@ -1038,6 +1062,14 @@ pub(super) async fn notify_webhook_waiting(
     .with_reasoning_effort(reasoning_effort);
     if let Err(error) = dispatch_webhook_channels(state, channels, &event, &notification_key).await
     {
+        if error.is_uncertain() {
+            state
+                .webhook_notifications
+                .lock()
+                .await
+                .settle(notification_key);
+            return Err(error.to_string());
+        }
         let rollback_error = release_waiting_notification(state, &notification_key)
             .await
             .err();
@@ -1049,7 +1081,7 @@ pub(super) async fn notify_webhook_waiting(
         if let Some(rollback_error) = rollback_error {
             return Err(format!("{error}；等待通知预留回滚失败：{rollback_error}"));
         }
-        return Err(error);
+        return Err(error.to_string());
     }
     state
         .webhook_notifications
@@ -1063,7 +1095,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use tokio::sync::{Mutex, RwLock, oneshot};
@@ -1375,6 +1407,64 @@ mod tests {
                 .await
                 .is_known(&notification_key)
         );
+    }
+
+    #[tokio::test]
+    async fn uncertain_waiting_delivery_keeps_the_durable_reservation() {
+        use tokio::io::AsyncReadExt;
+        use tokio::net::TcpListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let server_request_count = Arc::clone(&request_count);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let bytes_read = socket.read(&mut request).await.unwrap();
+            assert!(bytes_read > 0);
+            server_request_count.fetch_add(1, Ordering::AcqRel);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        });
+        let mut config = CodeyConfig::default();
+        config.webhook.channels = vec![NotificationChannelConfig {
+            id: "timeout-feishu".to_string(),
+            kind: NotificationChannelKind::Feishu,
+            enabled: true,
+            url: format!("http://{address}"),
+            ..NotificationChannelConfig::default()
+        }];
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            config: RwLock::new(config),
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_millis(50))
+                .build()
+                .unwrap(),
+            webhook_notifications: Mutex::new(WebhookNotificationState::default()),
+            persisted_waiting_notifications: Mutex::new(HashSet::new()),
+            ..AppState::default()
+        });
+        let notification_key =
+            waiting_notification_key("session-uncertain", "turn-uncertain", "approval-uncertain");
+        let payload = json!({
+            "sessionId": "session-uncertain",
+            "turnId": "turn-uncertain",
+            "waitingId": "approval-uncertain",
+            "sessionName": "Uncertain waiting notification",
+        });
+
+        let error = notify_webhook_waiting(&state, &payload).await.unwrap_err();
+        assert!(error.contains("发送结果不确定"));
+        assert!(
+            load_waiting_notification_ledger(&waiting_notification_ledger_path(&state.store))
+                .contains(&notification_key)
+        );
+        let duplicate = notify_webhook_waiting(&state, &payload).await.unwrap();
+        assert_eq!(duplicate["status"], "duplicate");
+        server.await.unwrap();
+        assert_eq!(request_count.load(Ordering::Acquire), 1);
     }
 
     #[test]

@@ -9,6 +9,40 @@ use serde_json::{Value, json};
 use super::channels::{NotificationChannelAdapter, adapter_for};
 use super::{NotificationChannelConfig, NotificationEvent};
 
+#[derive(Debug)]
+pub struct NotificationDeliveryError {
+    message: String,
+    uncertain: bool,
+}
+
+impl NotificationDeliveryError {
+    fn definitive(message: String) -> Self {
+        Self {
+            message,
+            uncertain: false,
+        }
+    }
+
+    fn uncertain(message: String) -> Self {
+        Self {
+            message,
+            uncertain: true,
+        }
+    }
+
+    pub fn is_uncertain(&self) -> bool {
+        self.uncertain
+    }
+}
+
+impl std::fmt::Display for NotificationDeliveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for NotificationDeliveryError {}
+
 #[derive(Clone)]
 pub struct NotificationDispatcher {
     client: Client,
@@ -31,18 +65,33 @@ impl NotificationDispatcher {
         Self { client, config }
     }
 
-    pub async fn send(&self, event: &NotificationEvent) -> Result<()> {
+    pub async fn send(
+        &self,
+        event: &NotificationEvent,
+    ) -> std::result::Result<(), NotificationDeliveryError> {
         self.send_with_attempts(event, 2).await
     }
 
-    async fn send_with_attempts(&self, event: &NotificationEvent, attempts: u32) -> Result<()> {
+    async fn send_with_attempts(
+        &self,
+        event: &NotificationEvent,
+        attempts: u32,
+    ) -> std::result::Result<(), NotificationDeliveryError> {
         if !self.config.enabled || !self.config.is_configured() {
             return Ok(());
         }
         let adapter = adapter_for(&self.config);
         let mut last_error = None;
         for attempt in 0..attempts.max(1) {
-            let request = adapter.build_request(&self.client, event)?;
+            let request = adapter
+                .build_request(&self.client, event)
+                .map_err(|error| {
+                    NotificationDeliveryError::definitive(format!(
+                        "{}消息发送失败：{}",
+                        adapter.display_name(),
+                        adapter.sanitize_error(&error.to_string())
+                    ))
+                })?;
             match request.send().await {
                 Ok(response) => {
                     let status = response.status();
@@ -54,14 +103,25 @@ impl NotificationDispatcher {
                             }
                         }
                         Err(error) => {
-                            last_error = Some(adapter.sanitize_error(&format!(
-                                "{}响应读取失败：{error}",
-                                adapter.display_name()
+                            return Err(NotificationDeliveryError::uncertain(format!(
+                                "{}消息发送结果不确定，已停止自动重试：{}",
+                                adapter.display_name(),
+                                adapter.sanitize_error(&format!(
+                                    "{}响应读取失败：{error}",
+                                    adapter.display_name()
+                                ))
                             )));
                         }
                     }
                 }
                 Err(error) => {
+                    if error.is_timeout() || !error.is_connect() {
+                        return Err(NotificationDeliveryError::uncertain(format!(
+                            "{}消息发送结果不确定，已停止自动重试：{}",
+                            adapter.display_name(),
+                            adapter.sanitize_error(&error.to_string())
+                        )));
+                    }
                     last_error = Some(adapter.sanitize_error(&error.to_string()));
                 }
             }
@@ -70,11 +130,11 @@ impl NotificationDispatcher {
             }
         }
         let error = last_error.unwrap_or_else(|| "未知错误".to_string());
-        Err(anyhow::anyhow!(
+        Err(NotificationDeliveryError::definitive(format!(
             "{}消息发送失败：{}",
             adapter.display_name(),
             adapter.sanitize_error(&error)
-        ))
+        )))
     }
 
     pub async fn test(&self) -> Result<Value> {
@@ -96,9 +156,12 @@ impl NotificationDispatcher {
         .with_reasoning_effort("high");
         let mut tester = self.clone();
         tester.config.enabled = true;
-        // A test click must finish promptly and report the real first error;
-        // background completion notifications retain one retry.
-        tester.send_with_attempts(&event, 1).await?;
+        // A test click must finish promptly and report the real first error.
+        // Background notifications only retry failures known not to be timeouts.
+        tester
+            .send_with_attempts(&event, 1)
+            .await
+            .map_err(anyhow::Error::new)?;
         Ok(json!({"status":"ok", "eventId": event.event_id}))
     }
 }
@@ -136,6 +199,64 @@ mod tests {
                 .to_string()
                 .contains("Webhook")
         );
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_http_timeout_is_never_retried() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        use tokio::io::AsyncReadExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let server_request_count = Arc::clone(&request_count);
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let bytes_read = socket.read(&mut request).await.unwrap();
+            assert!(bytes_read > 0);
+            server_request_count.fetch_add(1, Ordering::AcqRel);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            drop(socket);
+
+            if let Ok(Ok((_retry, _))) =
+                tokio::time::timeout(Duration::from_millis(400), listener.accept()).await
+            {
+                server_request_count.fetch_add(1, Ordering::AcqRel);
+            }
+        });
+        let client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let config = NotificationChannelConfig {
+            id: "timeout-feishu".to_string(),
+            kind: NotificationChannelKind::Feishu,
+            enabled: true,
+            url: format!("http://{address}"),
+            ..NotificationChannelConfig::default()
+        };
+        let dispatcher = NotificationDispatcher::with_client(client, config);
+        let event = NotificationEvent::new(
+            "session.waiting",
+            "session-timeout",
+            "profile-timeout",
+            "Codex",
+            0,
+            None,
+        );
+
+        let error = dispatcher.send(&event).await.unwrap_err();
+
+        assert!(error.is_uncertain());
+        assert!(error.to_string().contains("已停止自动重试"));
+        server.await.unwrap();
+        assert_eq!(request_count.load(Ordering::Acquire), 1);
     }
 
     #[test]
