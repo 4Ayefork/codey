@@ -146,6 +146,7 @@ fn find_codex_processes_finds_local_install_with_capitial_c() {
         executable_path: Some(std::path::PathBuf::from(
             r"D:\360Downloads\codexapp\app\Codex.exe",
         )),
+        creation_time: Some(1),
     }];
 
     assert_eq!(find_codex_processes_from_snapshot(&processes), vec![42]);
@@ -161,6 +162,7 @@ fn find_codex_processes_ignores_lowercase_local_cli_binary() {
         executable_path: Some(std::path::PathBuf::from(
             r"D:\360Downloads\codexapp\app\codex.exe",
         )),
+        creation_time: Some(1),
     }];
 
     assert!(find_codex_processes_from_snapshot(&processes).is_empty());
@@ -176,6 +178,7 @@ fn find_codex_processes_ignores_npm_cli_binary() {
         executable_path: Some(std::path::PathBuf::from(
             r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe",
         )),
+        creation_time: Some(1),
     }];
 
     assert!(find_codex_processes_from_snapshot(&processes).is_empty());
@@ -191,6 +194,7 @@ fn find_codex_processes_ignores_packaged_resource_cli_binary() {
         executable_path: Some(std::path::PathBuf::from(
             r"C:\Program Files\WindowsApps\OpenAI.Codex_1.0.0.0_x64__abc\app\resources\codex.exe",
         )),
+        creation_time: Some(1),
     }];
 
     assert!(find_codex_processes_from_snapshot(&processes).is_empty());
@@ -207,6 +211,7 @@ fn find_codex_processes_combines_store_and_local_installs() {
             executable_path: Some(std::path::PathBuf::from(
                 r"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2026.133.0_x64__abc\app\ChatGPT.exe",
             )),
+            creation_time: Some(1),
         },
         WindowsProcessInfo {
             process_id: 42,
@@ -215,6 +220,7 @@ fn find_codex_processes_combines_store_and_local_installs() {
             executable_path: Some(std::path::PathBuf::from(
                 r"D:\360Downloads\codexapp\app\Codex.exe",
             )),
+            creation_time: Some(2),
         },
     ];
 
@@ -230,12 +236,14 @@ fn find_codex_processes_ignores_unrelated_processes() {
             parent_process_id: 0,
             exe_file: "notepad.exe".to_string(),
             executable_path: Some(std::path::PathBuf::from(r"C:\Windows\notepad.exe")),
+            creation_time: Some(1),
         },
         WindowsProcessInfo {
             process_id: 20,
             parent_process_id: 0,
             exe_file: "codey.exe".to_string(),
             executable_path: Some(std::path::PathBuf::from(r"D:\Programs\Codey\codey.exe")),
+            creation_time: Some(2),
         },
     ];
 

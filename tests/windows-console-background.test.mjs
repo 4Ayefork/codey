@@ -22,7 +22,7 @@ test("Windows builds Codey as a GUI process without a console window", async () 
   assert.doesNotMatch(manifest, /Win32_System_Console|Win32_UI_WindowsAndMessaging/);
 });
 
-test("Windows background child processes never create console windows", async () => {
+test("Windows background helpers never create console windows", async () => {
   const [launcher, processCleanup] = await Promise.all([
     readFile(new URL("../backend/src/launcher.rs", import.meta.url), "utf8")
       .then(normalizeLineEndings),
@@ -36,9 +36,10 @@ test("Windows background child processes never create console windows", async ()
     )?.length,
     3,
   );
+  assert.doesNotMatch(processCleanup, /Command::new\("taskkill"\)/);
   assert.match(
     processCleanup,
-    /Command::new\("taskkill"\)[\s\S]*?creation_flags\(codey_runtime_core::windows_create_no_window\(\)\)/,
+    /codey_runtime_core::windows_terminate_process_if_matches/,
   );
 });
 

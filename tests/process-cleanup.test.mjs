@@ -51,6 +51,10 @@ test("every shutdown path reaps Codex and Codey process trees", async () => {
   );
   assert.match(cleanup, /process_ids_with_descendants/);
   assert.match(processTree, /matching_process_ids/);
+  assert.match(cleanup, /windows_process_paths_equal/);
+  assert.match(cleanup, /windows_terminate_process_if_matches/);
+  assert.doesNotMatch(cleanup, /pgrep|taskkill/);
+  assert.match(processTree, /identity\.start_time == process\.start_time/);
 
   const stopCommand = commands.slice(
     commands.indexOf("async fn stop_codey_runtime_locked"),

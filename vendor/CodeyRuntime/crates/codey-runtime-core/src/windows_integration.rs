@@ -5,14 +5,16 @@ use std::iter::once;
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::OnceLock;
 
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, WPARAM};
+use windows::Win32::Foundation::{
+    BOOL, CloseHandle, FILETIME, HANDLE, HWND, LPARAM, MAX_PATH, WPARAM,
+};
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -30,8 +32,8 @@ use windows::Win32::System::Registry::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-    TerminateProcess,
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess,
 };
 #[cfg(windows)]
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
@@ -65,6 +67,7 @@ pub struct WindowsProcessInfo {
     pub parent_process_id: u32,
     pub exe_file: String,
     pub executable_path: Option<PathBuf>,
+    pub creation_time: Option<u64>,
 }
 
 #[cfg(windows)]
@@ -314,11 +317,13 @@ pub fn enumerate_processes() -> Vec<WindowsProcessInfo> {
     }
     loop {
         let process_id = entry.th32ProcessID;
+        let (executable_path, creation_time) = query_process_identity(process_id);
         processes.push(WindowsProcessInfo {
             process_id,
             parent_process_id: entry.th32ParentProcessID,
             exe_file: nul_terminated_wide_to_string(&entry.szExeFile),
-            executable_path: query_process_image_path(process_id),
+            executable_path,
+            creation_time,
         });
         if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
             break;
@@ -343,6 +348,44 @@ pub fn terminate_process(process_id: u32) -> bool {
     }
     let _guard = HandleGuard(handle);
     unsafe { TerminateProcess(handle, 0) }.is_ok()
+}
+
+#[cfg(windows)]
+pub fn terminate_process_if_matches(
+    process_id: u32,
+    expected_path: &Path,
+    expected_creation_time: u64,
+) -> bool {
+    let Ok(handle) = (unsafe {
+        OpenProcess(
+            PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            process_id,
+        )
+    }) else {
+        return false;
+    };
+    if handle.is_invalid() {
+        return false;
+    }
+    let _guard = HandleGuard(handle);
+    let Some(executable_path) = query_process_image_path_from_handle(handle) else {
+        return false;
+    };
+    let Some(creation_time) = query_process_creation_time_from_handle(handle) else {
+        return false;
+    };
+    if creation_time != expected_creation_time
+        || !process_paths_equal(&executable_path, expected_path)
+    {
+        return false;
+    }
+    unsafe { TerminateProcess(handle, 0) }.is_ok()
+}
+
+#[cfg(windows)]
+pub fn process_paths_equal(left: &Path, right: &Path) -> bool {
+    normalize_process_path(left).eq_ignore_ascii_case(&normalize_process_path(right))
 }
 
 #[cfg(windows)]
@@ -376,12 +419,23 @@ pub fn apply_codey_icon_to_process_window(process_id: u32, icon_resource_path: P
 }
 
 #[cfg(windows)]
-fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()? };
+fn query_process_identity(process_id: u32) -> (Option<PathBuf>, Option<u64>) {
+    let Ok(handle) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) })
+    else {
+        return (None, None);
+    };
     if handle.is_invalid() {
-        return None;
+        return (None, None);
     }
     let _guard = HandleGuard(handle);
+    (
+        query_process_image_path_from_handle(handle),
+        query_process_creation_time_from_handle(handle),
+    )
+}
+
+#[cfg(windows)]
+fn query_process_image_path_from_handle(handle: HANDLE) -> Option<PathBuf> {
     let mut buffer = vec![0u16; MAX_PATH as usize * 4];
     let mut len = buffer.len() as u32;
     unsafe {
@@ -394,6 +448,38 @@ fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
         .ok()?;
     }
     Some(PathBuf::from(OsString::from_wide(&buffer[..len as usize])))
+}
+
+#[cfg(windows)]
+fn query_process_creation_time_from_handle(handle: HANDLE) -> Option<u64> {
+    let mut creation_time = FILETIME::default();
+    let mut exit_time = FILETIME::default();
+    let mut kernel_time = FILETIME::default();
+    let mut user_time = FILETIME::default();
+    unsafe {
+        GetProcessTimes(
+            handle,
+            &mut creation_time,
+            &mut exit_time,
+            &mut kernel_time,
+            &mut user_time,
+        )
+        .ok()?;
+    }
+    Some((u64::from(creation_time.dwHighDateTime) << 32) | u64::from(creation_time.dwLowDateTime))
+}
+
+#[cfg(windows)]
+fn normalize_process_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('/', "\\");
+    if let Some(path) = normalized.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{path}");
+    }
+    normalized
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&normalized)
+        .trim_end_matches('\\')
+        .to_string()
 }
 
 #[cfg(windows)]
@@ -672,5 +758,17 @@ mod tests {
         assert!(app_score > ime_score);
         assert_eq!(ime_score, tool_score);
         assert_eq!(auxiliary_app_score, ProcessWindowScore::Fallback);
+    }
+
+    #[test]
+    fn process_path_comparison_handles_case_separators_and_extended_prefixes() {
+        assert!(process_paths_equal(
+            Path::new(r"\\?\C:\Program Files\Codey\codey.exe"),
+            Path::new(r"c:/program files/codey/CODEY.EXE"),
+        ));
+        assert!(!process_paths_equal(
+            Path::new(r"C:\Program Files\Codey\codey.exe"),
+            Path::new(r"D:\Program Files\Codey\codey.exe"),
+        ));
     }
 }

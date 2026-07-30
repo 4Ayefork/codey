@@ -67,3 +67,21 @@ pub fn windows_apply_codey_icon_to_process_window(
 pub fn windows_enumerate_processes() -> Vec<windows_integration::WindowsProcessInfo> {
     windows_integration::enumerate_processes()
 }
+
+#[cfg(windows)]
+pub fn windows_process_paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
+    windows_integration::process_paths_equal(left, right)
+}
+
+#[cfg(windows)]
+pub fn windows_terminate_process_if_matches(
+    process_id: u32,
+    expected_path: &std::path::Path,
+    expected_creation_time: u64,
+) -> bool {
+    windows_integration::terminate_process_if_matches(
+        process_id,
+        expected_path,
+        expected_creation_time,
+    )
+}
