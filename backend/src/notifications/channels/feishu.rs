@@ -40,6 +40,19 @@ impl NotificationChannelAdapter for FeishuChannel<'_> {
     fn response_error(&self, body: &str) -> Option<String> {
         feishu_response_error(body)
     }
+
+    fn sanitize_transport_error(&self, error: &str) -> String {
+        let url = self.config.url.trim();
+        if url.is_empty() {
+            return error.to_string();
+        }
+
+        let mut sanitized = error.replace(url, "***");
+        if let Ok(normalized) = reqwest::Url::parse(url) {
+            sanitized = sanitized.replace(normalized.as_str(), "***");
+        }
+        sanitized
+    }
 }
 
 fn feishu_body(event: &NotificationEvent) -> Result<Value> {
@@ -239,5 +252,23 @@ mod tests {
                 .unwrap()
                 .contains("19021")
         );
+    }
+
+    #[test]
+    fn transport_errors_do_not_expose_the_webhook_url() {
+        let config = NotificationChannelConfig {
+            kind: crate::notifications::NotificationChannelKind::Feishu,
+            url: "https://open.feishu.cn/open-apis/bot/v2/hook/secret?sign=private".to_string(),
+            ..NotificationChannelConfig::default()
+        };
+        let channel = FeishuChannel::new(&config);
+
+        let error = channel.sanitize_transport_error(
+            "request to https://open.feishu.cn/open-apis/bot/v2/hook/secret?sign=private failed",
+        );
+
+        assert!(!error.contains("hook/secret"));
+        assert!(!error.contains("sign=private"));
+        assert!(error.contains("***"));
     }
 }

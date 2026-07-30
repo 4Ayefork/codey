@@ -1345,7 +1345,10 @@ fn redacted_config(config: &CodeyConfig) -> CodeyConfig {
     for profile in &mut public.profiles {
         profile.api_key.clear();
     }
+    public.webhook.url.clear();
     for channel in &mut public.webhook.channels {
+        channel.url_configured = !channel.url.trim().is_empty();
+        channel.url.clear();
         channel.bot_token_configured = !channel.bot_token.trim().is_empty();
         channel.bot_token.clear();
     }
@@ -3027,6 +3030,12 @@ mod tests {
         let mut config = CodeyConfig::default();
         config.profiles[0].api_key = "renderer-secret".to_string();
         config.hide_full_access_warning = true;
+        config.webhook.url = "https://open.feishu.cn/legacy-secret".to_string();
+        config.webhook.channels.push(NotificationChannelConfig {
+            id: "feishu-1".to_string(),
+            url: "https://open.feishu.cn/open-apis/bot/v2/hook/renderer-secret".to_string(),
+            ..NotificationChannelConfig::default()
+        });
         config.webhook.channels.push(NotificationChannelConfig {
             id: "telegram-1".to_string(),
             kind: crate::notifications::NotificationChannelKind::Telegram,
@@ -3039,10 +3048,14 @@ mod tests {
 
         assert_eq!(public["profiles"][0]["apiKey"], "");
         assert_eq!(public["hideFullAccessWarning"], true);
-        assert_eq!(public["webhook"]["channels"][0]["botToken"], "");
-        assert_eq!(public["webhook"]["channels"][0]["botTokenConfigured"], true);
+        assert!(public["webhook"].get("url").is_none());
+        assert_eq!(public["webhook"]["channels"][0]["url"], "");
+        assert_eq!(public["webhook"]["channels"][0]["urlConfigured"], true);
+        assert_eq!(public["webhook"]["channels"][1]["botToken"], "");
+        assert_eq!(public["webhook"]["channels"][1]["botTokenConfigured"], true);
         assert!(!public.to_string().contains("renderer-secret"));
         assert!(!public.to_string().contains("telegram-secret"));
+        assert!(!public.to_string().contains("legacy-secret"));
     }
 
     #[test]

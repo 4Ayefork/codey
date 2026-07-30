@@ -23,6 +23,10 @@ pub struct NotificationChannelConfig {
     #[serde(default)]
     pub url: String,
     #[serde(default)]
+    pub url_configured: bool,
+    #[serde(default, skip_serializing)]
+    pub clear_url: bool,
+    #[serde(default)]
     pub bot_token: String,
     #[serde(default)]
     pub bot_token_configured: bool,
@@ -39,6 +43,8 @@ impl Default for NotificationChannelConfig {
             kind: NotificationChannelKind::Feishu,
             enabled: true,
             url: String::new(),
+            url_configured: false,
+            clear_url: false,
             bot_token: String::new(),
             bot_token_configured: false,
             clear_bot_token: false,
@@ -97,6 +103,8 @@ impl WebhookConfig {
                 ids.insert(channel.id.clone());
             }
             channel.url = channel.url.trim().to_string();
+            channel.url_configured = !channel.url.is_empty();
+            channel.clear_url = false;
             channel.bot_token = channel.bot_token.trim().to_string();
             channel.chat_id = channel.chat_id.trim().to_string();
             channel.bot_token_configured = !channel.bot_token.is_empty();
@@ -112,21 +120,39 @@ impl WebhookConfig {
 
     pub fn merge_redacted_secrets(&mut self, previous: &Self) {
         for channel in &mut self.channels {
-            if channel.kind != NotificationChannelKind::Telegram {
-                continue;
-            }
-            if channel.clear_bot_token {
-                channel.bot_token.clear();
-                channel.bot_token_configured = false;
-                continue;
-            }
-            if !channel.bot_token.trim().is_empty() || !channel.bot_token_configured {
-                continue;
-            }
-            if let Some(existing) = previous.channels.iter().find(|existing| {
-                existing.id == channel.id && existing.kind == NotificationChannelKind::Telegram
-            }) {
-                channel.bot_token = existing.bot_token.clone();
+            match channel.kind {
+                NotificationChannelKind::Feishu => {
+                    if channel.clear_url {
+                        channel.url.clear();
+                        channel.url_configured = false;
+                        continue;
+                    }
+                    if !channel.url.trim().is_empty() || !channel.url_configured {
+                        continue;
+                    }
+                    if let Some(existing) = previous.channels.iter().find(|existing| {
+                        existing.id == channel.id
+                            && existing.kind == NotificationChannelKind::Feishu
+                    }) {
+                        channel.url = existing.url.clone();
+                    }
+                }
+                NotificationChannelKind::Telegram => {
+                    if channel.clear_bot_token {
+                        channel.bot_token.clear();
+                        channel.bot_token_configured = false;
+                        continue;
+                    }
+                    if !channel.bot_token.trim().is_empty() || !channel.bot_token_configured {
+                        continue;
+                    }
+                    if let Some(existing) = previous.channels.iter().find(|existing| {
+                        existing.id == channel.id
+                            && existing.kind == NotificationChannelKind::Telegram
+                    }) {
+                        channel.bot_token = existing.bot_token.clone();
+                    }
+                }
             }
         }
     }
@@ -155,8 +181,58 @@ mod tests {
 
         assert_eq!(config.channels.len(), 2);
         assert!(config.has_enabled_channel());
+        assert!(config.channels[0].url_configured);
         assert_eq!(config.channels[1].kind, NotificationChannelKind::Telegram);
         assert!(config.channels[1].bot_token_configured);
+    }
+
+    #[test]
+    fn redacted_feishu_url_is_restored_when_other_settings_are_saved() {
+        let previous = WebhookConfig {
+            channels: vec![NotificationChannelConfig {
+                id: "feishu-1".to_string(),
+                kind: NotificationChannelKind::Feishu,
+                enabled: true,
+                url: "https://open.feishu.cn/open-apis/bot/v2/hook/secret".to_string(),
+                url_configured: true,
+                ..NotificationChannelConfig::default()
+            }],
+            ..WebhookConfig::default()
+        };
+        let mut incoming = previous.clone();
+        incoming.channels[0].url.clear();
+        incoming.merge_redacted_secrets(&previous);
+
+        assert_eq!(
+            incoming.channels[0].url,
+            "https://open.feishu.cn/open-apis/bot/v2/hook/secret"
+        );
+    }
+
+    #[test]
+    fn explicit_feishu_url_clear_does_not_restore_the_previous_secret() {
+        let previous = WebhookConfig {
+            channels: vec![NotificationChannelConfig {
+                id: "feishu-1".to_string(),
+                kind: NotificationChannelKind::Feishu,
+                url: "https://open.feishu.cn/open-apis/bot/v2/hook/secret".to_string(),
+                url_configured: true,
+                ..NotificationChannelConfig::default()
+            }],
+            ..WebhookConfig::default()
+        };
+        let mut incoming = previous.clone();
+        incoming.channels[0].url.clear();
+        incoming.channels[0].clear_url = true;
+        incoming.merge_redacted_secrets(&previous);
+
+        assert!(incoming.channels[0].url.is_empty());
+        assert!(!incoming.channels[0].url_configured);
+        assert!(
+            serde_json::to_value(&incoming).unwrap()["channels"][0]
+                .get("clearUrl")
+                .is_none()
+        );
     }
 
     #[test]

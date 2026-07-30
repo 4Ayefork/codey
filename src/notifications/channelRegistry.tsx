@@ -36,7 +36,8 @@ const CHANNEL_DEFINITIONS: Record<
     description: "发送完成、失败和等待介入提醒",
     Icon: IconBell,
     Editor: FeishuChannelEditor,
-    isConfigured: (channel) => Boolean(channel.url.trim()),
+    isConfigured: (channel) =>
+      Boolean(channel.url.trim() || channel.urlConfigured),
   },
   telegram: {
     kind: "telegram",
@@ -76,6 +77,8 @@ export function createNotificationChannel(
     kind,
     enabled: true,
     url: "",
+    urlConfigured: false,
+    clearUrl: false,
     botToken: "",
     botTokenConfigured: false,
     clearBotToken: false,

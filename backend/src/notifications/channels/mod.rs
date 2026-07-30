@@ -11,10 +11,7 @@ pub(super) trait NotificationChannelAdapter: Send + Sync {
     fn configuration_error(&self) -> Option<&'static str>;
     fn build_request(&self, client: &Client, event: &NotificationEvent) -> Result<RequestBuilder>;
     fn response_error(&self, body: &str) -> Option<String>;
-
-    fn sanitize_transport_error(&self, error: &str) -> String {
-        error.to_string()
-    }
+    fn sanitize_transport_error(&self, error: &str) -> String;
 }
 
 pub(super) fn adapter_for(
