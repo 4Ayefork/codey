@@ -5,20 +5,22 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("subagent optimization is opt-in and exposed through the settings switch", async () => {
-  const [appSource, sectionsSource, configSource, commandSource, launcherSource] = await Promise.all([
+  const [appSource, modelHookSource, sectionsSource, configSource, commandSource, launcherSource] = await Promise.all([
     readFile(new URL("src/App.tsx", root), "utf8"),
+    readFile(new URL("src/useModelSelection.ts", root), "utf8"),
     readFile(new URL("src/FeaturePolicyCard.tsx", root), "utf8"),
     readFile(new URL("backend/src/config.rs", root), "utf8"),
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
     readFile(new URL("backend/src/launcher.rs", root), "utf8"),
   ]);
   const uiSource = `${appSource}\n${sectionsSource}`;
+  const modelSource = `${appSource}\n${modelHookSource}`;
 
   assert.match(configSource, /pub subagent_optimization: bool/);
   assert.match(configSource, /subagent_optimization: false/);
   assert.match(commandSource, /config\.subagent_optimization = config_input\.subagent_optimization/);
   assert.match(launcherSource, /config\.subagent_optimization/);
-  assert.match(appSource, /const SUBAGENT_MODEL = "gpt-5\.6-luna"/);
+  assert.match(modelHookSource, /const SUBAGENT_MODEL = "gpt-5\.6-luna"/);
   assert.match(uiSource, /checked=\{config\.subagentOptimization\}/);
   assert.match(
     uiSource,
@@ -26,10 +28,10 @@ test("subagent optimization is opt-in and exposed through the settings switch", 
   );
   assert.match(uiSource, /aria-label="启用子代理协作优化"/);
   assert.match(uiSource, /<Badge variant="warning">需支持 GPT-5\.6-Luna<\/Badge>/);
-  assert.match(appSource, /invoke\("fetch_current_provider_models"\)/);
-  assert.match(appSource, /supportsModel\(result\.models, SUBAGENT_MODEL\)/);
-  assert.match(appSource, /provider\.official \? "官方账号" : "第三方 API"/);
-  assert.match(appSource, /不支持 \$\{SUBAGENT_MODEL\}，无法开启子代理协作优化/);
+  assert.match(modelSource, /invoke\("fetch_current_provider_models"\)/);
+  assert.match(modelSource, /supportsModel\(result\.models, SUBAGENT_MODEL\)/);
+  assert.match(modelSource, /provider\.official \? "官方账号" : "第三方 API"/);
+  assert.match(modelSource, /不支持 \$\{SUBAGENT_MODEL\}，无法开启子代理协作优化/);
   assert.match(uiSource, /启用v2并行配置/);
   assert.doesNotMatch(uiSource, /下次启动启用 V2 并行配置，退出时自动恢复原文件/);
 });
