@@ -351,22 +351,13 @@ pub fn apply_relay_profile_files_to_home_with_context(
     profile: &RelayProfile,
     common_config_contents: &str,
 ) -> anyhow::Result<RelayApplyResult> {
-    let selected_common = if profile.use_common_config {
-        filter_common_config_for_profile(common_config_contents, profile)?
-    } else {
-        String::new()
-    };
-    let profile_config = complete_relay_profile_config(profile)?;
-    let config_with_common = merge_common_config_into_config(&profile_config, &selected_common)?;
-    let config_with_common =
-        preserve_unmanaged_live_context_entries(home, &config_with_common, common_config_contents)?;
-    let config_with_limits = apply_context_limits_to_config(
-        &config_with_common,
-        &profile.context_window,
-        &profile.auto_compact_limit,
+    let config = render_relay_profile_config(
+        home,
+        profile,
+        common_config_contents,
+        RelayProfileRenderOptions::switchable(),
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
-    apply_relay_files_to_home(home, &config_with_catalog, &profile.auth_contents)
+    apply_relay_files_to_home(home, &config, &profile.auth_contents)
 }
 
 pub fn apply_relay_profile_to_home_with_switch_rules(
@@ -388,26 +379,17 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
     common_config_contents: &str,
     preserve_computer_use_guard: bool,
 ) -> anyhow::Result<RelayApplyResult> {
-    let selected_common = if profile.use_common_config {
-        filter_common_config_for_profile(common_config_contents, profile)?
-    } else {
-        String::new()
-    };
-    let profile_config = complete_relay_profile_config(profile)?;
-    let config_with_common = merge_common_config_into_config(&profile_config, &selected_common)?;
-    let config_with_common =
-        preserve_unmanaged_live_context_entries(home, &config_with_common, common_config_contents)?;
-    let config_with_limits = apply_context_limits_to_config(
-        &config_with_common,
-        &profile.context_window,
-        &profile.auto_compact_limit,
+    let config = render_relay_profile_config(
+        home,
+        profile,
+        common_config_contents,
+        RelayProfileRenderOptions::switchable(),
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
 
     if profile.relay_mode == crate::settings::RelayMode::PureApi {
         apply_relay_files_to_home_with_computer_use_guard(
             home,
-            &config_with_catalog,
+            &config,
             &profile.auth_contents,
             preserve_computer_use_guard,
         )
@@ -415,7 +397,7 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
         let auth_contents = official_profile_auth_for_switch(home, &profile.auth_contents)?;
         apply_relay_files_to_home_with_computer_use_guard(
             home,
-            &config_with_catalog,
+            &config,
             &auth_contents,
             preserve_computer_use_guard,
         )
@@ -427,20 +409,73 @@ pub fn apply_relay_profile_config_to_home_with_context(
     profile: &RelayProfile,
     common_config_contents: &str,
 ) -> anyhow::Result<RelayApplyResult> {
+    let config = render_relay_profile_config(
+        home,
+        profile,
+        common_config_contents,
+        RelayProfileRenderOptions::config_only(),
+    )?;
+    apply_relay_config_file_to_home(home, &config)
+}
+
+#[derive(Clone, Copy)]
+enum RelayCommonConfigScope {
+    Profile,
+    Selection,
+}
+
+#[derive(Clone, Copy)]
+struct RelayProfileRenderOptions {
+    common_scope: RelayCommonConfigScope,
+    preserve_unmanaged_live_context: bool,
+}
+
+impl RelayProfileRenderOptions {
+    fn switchable() -> Self {
+        Self {
+            common_scope: RelayCommonConfigScope::Profile,
+            preserve_unmanaged_live_context: true,
+        }
+    }
+
+    fn config_only() -> Self {
+        Self {
+            common_scope: RelayCommonConfigScope::Selection,
+            preserve_unmanaged_live_context: false,
+        }
+    }
+}
+
+fn render_relay_profile_config(
+    home: &Path,
+    profile: &RelayProfile,
+    common_config_contents: &str,
+    options: RelayProfileRenderOptions,
+) -> anyhow::Result<String> {
     let selected_common = if profile.use_common_config {
-        filter_common_config_for_selection(common_config_contents, &profile.context_selection)?
+        match options.common_scope {
+            RelayCommonConfigScope::Profile => {
+                filter_common_config_for_profile(common_config_contents, profile)?
+            }
+            RelayCommonConfigScope::Selection => filter_common_config_for_selection(
+                common_config_contents,
+                &profile.context_selection,
+            )?,
+        }
     } else {
         String::new()
     };
     let profile_config = complete_relay_profile_config(profile)?;
-    let config_with_common = merge_common_config_into_config(&profile_config, &selected_common)?;
-    let config_with_limits = apply_context_limits_to_config(
-        &config_with_common,
+    let mut config = merge_common_config_into_config(&profile_config, &selected_common)?;
+    if options.preserve_unmanaged_live_context {
+        config = preserve_unmanaged_live_context_entries(home, &config, common_config_contents)?;
+    }
+    config = apply_context_limits_to_config(
+        &config,
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
-    apply_relay_config_file_to_home(home, &config_with_catalog)
+    apply_model_catalog_to_config(home, profile, &config)
 }
 
 pub fn apply_relay_config_file_to_home(
