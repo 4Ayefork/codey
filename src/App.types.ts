@@ -24,6 +24,7 @@ export type ExperimentalFeaturesConfig = {
 };
 
 export type Config = {
+  settingsRevision: number;
   activeProfileId: string;
   profiles: Profile[];
   webhook: { channels: NotificationChannel[] };

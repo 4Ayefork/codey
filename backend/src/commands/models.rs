@@ -57,6 +57,7 @@ pub async fn sync_official_experimental_features(state: &Arc<AppState>) -> Resul
 }
 
 pub async fn sync_cc_switch_state(state: &Arc<AppState>) -> cc_switch::CcSwitchStatus {
+    let _config_write_guard = state.config_write_lock.lock().await;
     let previous = state.config.read().await.clone();
     let sync_input = previous.clone();
     let home = codex_home();
@@ -161,6 +162,7 @@ pub(super) async fn sync_provider_models_for_launch(state: &Arc<AppState>) -> Co
             (model_catalog::default_official_model_slugs(), false)
         }
     };
+    let _config_write_guard = state.config_write_lock.lock().await;
     let latest = state.config.read().await.clone();
     if latest.current_provider_id() != Some(provider_id.as_str()) {
         eprintln!("启动时同步模型期间当前线路已变化，忽略旧线路的同步结果");
@@ -185,14 +187,19 @@ pub async fn fetch_current_provider_models(state: &Arc<AppState>) -> Result<Valu
     if profile.cc_switch_read_only {
         return Err("官方线路使用官方模型目录，无需同步第三方模型".to_string());
     }
-    let models = provider_models::fetch(&profile, &state.http_client)
-        .await
-        .map_err(|error| error.to_string())?;
     let provider_id = config
         .current_provider_id()
         .ok_or_else(|| "当前线路缺少标识".to_string())?
         .to_string();
-    let mut next = config;
+    let models = provider_models::fetch(&profile, &state.http_client)
+        .await
+        .map_err(|error| error.to_string())?;
+    let _config_write_guard = state.config_write_lock.lock().await;
+    let latest = state.config.read().await.clone();
+    if latest.current_provider_id() != Some(provider_id.as_str()) {
+        return Err("同步模型期间当前线路已变化，请重试".to_string());
+    }
+    let mut next = latest;
     next.upstream_models_by_provider
         .insert(provider_id, models.clone());
     next = next.normalize();
@@ -215,6 +222,7 @@ pub async fn save_selected_models(
     state: &Arc<AppState>,
     requested_models: Vec<String>,
 ) -> Result<Value, String> {
+    let _config_write_guard = state.config_write_lock.lock().await;
     let mut config = state.config.read().await.clone();
     let profile = config
         .profiles
@@ -272,6 +280,7 @@ pub async fn save_default_model(
     state: &Arc<AppState>,
     requested_model: String,
 ) -> Result<Value, String> {
+    let _config_write_guard = state.config_write_lock.lock().await;
     let mut config = state.config.read().await.clone();
     let requested_model = requested_model.trim();
     if requested_model.is_empty() {

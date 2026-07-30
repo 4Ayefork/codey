@@ -73,6 +73,7 @@ const STARTUP_PROVIDER_MODEL_SYNC_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct AppState {
     pub store: ConfigStore,
     pub config: RwLock<CodeyConfig>,
+    config_write_lock: Mutex<()>,
     pub http_client: reqwest::Client,
     pub runtime: Mutex<Option<Arc<CodeyRuntime>>>,
     runtime_operation: Mutex<()>,
@@ -124,6 +125,7 @@ impl Default for AppState {
         Self {
             store,
             config: RwLock::new(config),
+            config_write_lock: Mutex::new(()),
             http_client: reqwest::Client::builder()
                 .user_agent(format!("Codey/{}", env!("CARGO_PKG_VERSION")))
                 .connect_timeout(Duration::from_secs(5))
@@ -550,8 +552,10 @@ async fn ensure_windows_codex_app_path(state: &Arc<AppState>) -> Result<(), Stri
         return Err(format!("{error}；已取消选择安装目录"));
     };
     let app_dir = validate_codex_app_path(&selected.to_string_lossy())?;
+    let _config_write_guard = state.config_write_lock.lock().await;
     let mut config = state.config.read().await.clone();
     config.codex_app_path = app_dir.to_string_lossy().to_string();
+    config.settings_revision = config.settings_revision.saturating_add(1);
     state
         .store
         .save(&config)
@@ -562,16 +566,28 @@ async fn ensure_windows_codex_app_path(state: &Arc<AppState>) -> Result<(), Stri
 
 async fn set_codex_app_path(state: &Arc<AppState>, path: String) -> Result<Value, String> {
     let app_dir = validate_codex_app_path(&path)?;
+    let _config_write_guard = state.config_write_lock.lock().await;
     let mut config = state.config.read().await.clone();
     config.codex_app_path = app_dir.to_string_lossy().to_string();
-    save_codey_config(state, config).await
+    save_codey_config_locked(state, config).await
 }
 
 pub async fn save_codey_config(
     state: &Arc<AppState>,
+    config_input: CodeyConfig,
+) -> Result<Value, String> {
+    let _config_write_guard = state.config_write_lock.lock().await;
+    save_codey_config_locked(state, config_input).await
+}
+
+async fn save_codey_config_locked(
+    state: &Arc<AppState>,
     mut config_input: CodeyConfig,
 ) -> Result<Value, String> {
     let previous = state.config.read().await.clone();
+    if config_input.settings_revision != previous.settings_revision {
+        return Err("Codey 设置已被其他操作更新，请关闭后重新打开设置页面再保存".to_string());
+    }
     // Provider records, credentials and model-selection caches are read-only
     // through this general settings endpoint.
     let mut config = previous.clone();
@@ -590,7 +606,8 @@ pub async fn save_codey_config(
     config.subagent_optimization = config_input.subagent_optimization;
     config.hide_full_access_warning = config_input.hide_full_access_warning;
     config.experimental_features = config_input.experimental_features;
-    let config = config.normalize();
+    let mut config = config.normalize();
+    config.settings_revision = previous.settings_revision.saturating_add(1);
     let restart_required = runtime_config_requires_restart(state, &config).await;
     if config.disable_trace_log_writes != previous.disable_trace_log_writes {
         let home = codex_home();
@@ -1203,6 +1220,52 @@ mod tests {
         assert!(!public.to_string().contains("renderer-secret"));
         assert!(!public.to_string().contains("telegram-secret"));
         assert!(!public.to_string().contains("legacy-secret"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn stale_concurrent_config_saves_are_rejected_without_diverging_disk_and_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let initial = CodeyConfig::default();
+        let state = Arc::new(AppState {
+            store: ConfigStore::new(directory.path().join("config.json")),
+            config: RwLock::new(initial.clone()),
+            ..AppState::default()
+        });
+        let save_count = 8;
+        let barrier = Arc::new(tokio::sync::Barrier::new(save_count + 1));
+        let tasks = (0..save_count)
+            .map(|index| {
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                let mut input = initial.clone();
+                input.user_scripts = vec![format!("// concurrent save {index}")];
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    save_codey_config(&state, input).await
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait().await;
+        let mut successes = 0;
+        let mut conflicts = 0;
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(_) => successes += 1,
+                Err(error) => {
+                    assert!(error.contains("已被其他操作更新"));
+                    conflicts += 1;
+                }
+            }
+        }
+
+        assert_eq!(successes, 1);
+        assert_eq!(conflicts, save_count - 1);
+        let memory = state.config.read().await.clone();
+        let disk = state.store.load().unwrap();
+        assert_eq!(disk, memory);
+        assert_eq!(memory.settings_revision, 1);
+        assert_eq!(memory.user_scripts.len(), 1);
     }
 
     #[test]

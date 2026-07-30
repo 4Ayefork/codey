@@ -15,6 +15,7 @@ if (import.meta.env.DEV) {
         ? "windows"
         : "macos";
     let previewConfig = {
+      settingsRevision: 0,
       activeProfileId: "primary",
       profiles: [
         {
@@ -226,7 +227,10 @@ if (import.meta.env.DEV) {
         return { status: "ok" };
       }
       if (command === "save_codey_config") {
-        previewConfig = args.config as typeof previewConfig;
+        previewConfig = {
+          ...(args.config as typeof previewConfig),
+          settingsRevision: previewConfig.settingsRevision + 1,
+        };
         return {
           config: previewConfig,
           modelState: previewModelState,

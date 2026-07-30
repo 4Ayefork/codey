@@ -116,6 +116,8 @@ impl ExperimentalFeaturesConfig {
 #[serde(rename_all = "camelCase")]
 pub struct CodeyConfig {
     #[serde(default)]
+    pub settings_revision: u64,
+    #[serde(default)]
     pub active_profile_id: String,
     #[serde(default)]
     pub profiles: Vec<ProviderProfile>,
@@ -182,6 +184,7 @@ impl Default for CodeyConfig {
     fn default() -> Self {
         let profile = ProviderProfile::new("默认配置");
         Self {
+            settings_revision: 0,
             active_profile_id: profile.id.clone(),
             profiles: vec![profile],
             webhook: WebhookConfig::default(),
