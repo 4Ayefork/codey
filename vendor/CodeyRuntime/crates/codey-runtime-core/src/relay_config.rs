@@ -472,27 +472,7 @@ pub fn apply_pure_api_config_to_home_with_protocol(
     protocol: RelayProtocol,
     proxy_port: u16,
 ) -> anyhow::Result<RelayApplyResult> {
-    let base_url = base_url.trim();
-    if base_url.is_empty() {
-        anyhow::bail!("中转 Base URL 不能为空");
-    }
-    let bearer_token = bearer_token.trim();
-    if bearer_token.is_empty() {
-        anyhow::bail!("中转 Key 不能为空");
-    }
-    let codex_base_url = codex_base_url_for_protocol(base_url, protocol, proxy_port);
-    let updated = upsert_model_provider_config("", &codex_base_url, bearer_token)?;
-    let auth_contents = serde_json::to_string_pretty(&json!({
-        "OPENAI_API_KEY": bearer_token
-    }))?;
-    let backup_path =
-        write_codex_live_atomic(home, Some(&updated), Some(auth_contents.as_bytes()), false)?;
-    let status = relay_config_status_from_home(home);
-    Ok(RelayApplyResult {
-        config_path: status.config_path,
-        backup_path,
-        configured: status.configured,
-    })
+    apply_relay_config_to_home_with_protocol(home, base_url, bearer_token, protocol, proxy_port)
 }
 
 pub async fn test_relay_profile(
