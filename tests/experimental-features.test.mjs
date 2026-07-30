@@ -4,7 +4,7 @@ import test from "node:test";
 
 const paths = {
   app: new URL("../src/App.tsx", import.meta.url),
-  sections: new URL("../src/AppSections.tsx", import.meta.url),
+  sections: new URL("../src/ExperimentalFeaturesCard.tsx", import.meta.url),
   types: new URL("../src/App.types.ts", import.meta.url),
   config: new URL("../backend/src/config.rs", import.meta.url),
   commands: new URL("../backend/src/commands.rs", import.meta.url),
@@ -60,7 +60,7 @@ test("the experimental feature card exposes all switches with concise descriptio
   }
   const featureDefinitions = sections.slice(
     sections.indexOf("const EXPERIMENTAL_FEATURES"),
-    sections.indexOf("type OperationsPanelProps"),
+    sections.indexOf("type ExperimentalFeaturesCardProps"),
   );
   const descriptions = featureDefinitions.match(/description: "[^"]+"/g) ?? [];
   assert.equal(descriptions.length, flags.length);

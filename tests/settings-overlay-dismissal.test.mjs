@@ -32,7 +32,7 @@ test("settings overlay only closes explicitly and restores unsaved config", asyn
 
 test("operations tooltips stay inside the settings overlay", async () => {
   const appSectionsSource = await readFile(
-    new URL("src/AppSections.tsx", root),
+    new URL("src/OperationsPanel.tsx", root),
     "utf8",
   );
   assert.match(

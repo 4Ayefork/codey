@@ -7,7 +7,7 @@ const root = new URL("../", import.meta.url);
 test("subagent optimization is opt-in and exposed through the settings switch", async () => {
   const [appSource, sectionsSource, configSource, commandSource, launcherSource] = await Promise.all([
     readFile(new URL("src/App.tsx", root), "utf8"),
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    readFile(new URL("src/FeaturePolicyCard.tsx", root), "utf8"),
     readFile(new URL("backend/src/config.rs", root), "utf8"),
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
     readFile(new URL("backend/src/launcher.rs", root), "utf8"),

@@ -52,7 +52,7 @@ test("fast startup shield is enabled by default and exposed as a restart-safe se
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
     readFile(new URL("backend/src/launcher.rs", root), "utf8"),
     readFile(new URL("backend/src/cdp.rs", root), "utf8"),
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    readFile(new URL("src/FeaturePolicyCard.tsx", root), "utf8"),
   ]);
 
   assert.match(configSource, /pub fast_codex_startup: bool/);

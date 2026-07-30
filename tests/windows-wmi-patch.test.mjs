@@ -65,7 +65,7 @@ test("Windows lag patch bypasses only the recurring WMI snapshot worker", async 
 
 test("settings exposes the Windows optimization patch status only on Windows clients", async () => {
   const [sectionsSource, typesSource, commandsSource] = await Promise.all([
-    readFile(new URL("../src/AppSections.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/OperationsPanel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/App.types.ts", import.meta.url), "utf8"),
     readFile(new URL("../backend/src/commands/runtime.rs", import.meta.url), "utf8"),
   ]);
@@ -83,7 +83,7 @@ test("settings exposes the Windows optimization patch status only on Windows cli
 test("trace guard, stats, pet, and voice remain user-configurable", async () => {
   const [appSource, sectionsSource, configSource, traceSource, launcherSource, commandsSource] = await Promise.all([
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../src/AppSections.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/FeaturePolicyCard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../backend/src/config.rs", import.meta.url), "utf8"),
     readFile(new URL("../src/TraceLogModule.tsx", import.meta.url), "utf8"),
     readFile(new URL("../backend/src/launcher.rs", import.meta.url), "utf8"),

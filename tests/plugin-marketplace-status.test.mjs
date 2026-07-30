@@ -16,7 +16,7 @@ test("plugin marketplace repair is explicit and status checks stay read-only", a
         .then(normalizeLineEndings),
       readFile(new URL("src/App.tsx", root), "utf8")
         .then(normalizeLineEndings),
-      readFile(new URL("src/AppSections.tsx", root), "utf8")
+      readFile(new URL("src/OperationsPanel.tsx", root), "utf8")
         .then(normalizeLineEndings),
     ]);
 

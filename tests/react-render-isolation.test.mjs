@@ -16,7 +16,15 @@ test("settings panels keep stable handlers and skip unrelated parent renders", a
     channelRegistry,
   ] = await Promise.all([
     readFile(new URL("src/App.tsx", root), "utf8"),
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    Promise.all(
+      [
+        "OperationsPanel.tsx",
+        "AppUpdateCard.tsx",
+        "ModelSection.tsx",
+        "ExperimentalFeaturesCard.tsx",
+        "FeaturePolicyCard.tsx",
+      ].map((file) => readFile(new URL(`src/${file}`, root), "utf8")),
+    ).then((sources) => sources.join("\n")),
     readFile(new URL("src/AppDialogs.tsx", root), "utf8"),
     readFile(new URL("src/TraceLogModule.tsx", root), "utf8"),
     readFile(

@@ -130,7 +130,7 @@ function appendPersistentEnglishWarning(body) {
 
 test("full-access warning shield is opt-in and persisted by Codey settings", async () => {
   const [sectionsSource, configSource, commandSource, cdpSource] = await Promise.all([
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    readFile(new URL("src/FeaturePolicyCard.tsx", root), "utf8"),
     readFile(new URL("backend/src/config.rs", root), "utf8"),
     readFile(new URL("backend/src/commands.rs", root), "utf8"),
     readFile(new URL("backend/src/cdp.rs", root), "utf8"),

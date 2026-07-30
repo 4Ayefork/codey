@@ -59,7 +59,7 @@ test("GPU launch modes are mutually exclusive, opt-in, and persisted", async () 
 
 test("three-position GPU slider is accessible and disabled on macOS", async () => {
   const [sectionsSource, stylesSource, appSource, launcherSource, previewSource] = await Promise.all([
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    readFile(new URL("src/FeaturePolicyCard.tsx", root), "utf8"),
     readFile(new URL("src/styles.css", root), "utf8"),
     readFile(new URL("src/App.tsx", root), "utf8"),
     readFile(new URL("backend/src/launcher.rs", root), "utf8"),

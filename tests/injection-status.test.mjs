@@ -24,7 +24,7 @@ test("script injection diagnostics report runtime evidence without continuous po
     readFile(new URL("src/App.tsx", root), "utf8"),
     readFile(new URL("src/overlay.tsx", root), "utf8"),
     readFile(new URL("src/App.types.ts", root), "utf8"),
-    readFile(new URL("src/AppSections.tsx", root), "utf8"),
+    readFile(new URL("src/OperationsPanel.tsx", root), "utf8"),
     readFile(new URL("public/plugin-marketplace-fix.js", root), "utf8"),
     readFile(new URL("src/styles.css", root), "utf8"),
   ]);
